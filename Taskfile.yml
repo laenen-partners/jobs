@@ -1,0 +1,40 @@
+version: "3"
+
+tasks:
+  generate:
+    desc: Generate proto code
+    cmds:
+      - buf dep update
+      - buf generate
+
+  lint:
+    desc: Lint proto definitions
+    cmds:
+      - buf lint
+
+  build:
+    desc: Build the module
+    cmds:
+      - go build ./...
+
+  test:
+    desc: Run tests
+    cmds:
+      - go test -v -count=1 ./...
+
+  test:cover:
+    desc: Run tests with coverage
+    cmds:
+      - go test -v -count=1 -coverprofile=coverage.out ./...
+      - go tool cover -func=coverage.out
+
+  tidy:
+    desc: Tidy all Go modules
+    cmds:
+      - go mod tidy
+      - cd dbosutil && go mod tidy
+
+  clean:
+    desc: Remove build artifacts
+    cmds:
+      - rm -rf bin/ gen/ coverage.out

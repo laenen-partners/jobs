@@ -1,0 +1,111 @@
+syntax = "proto3";
+package jobs.v1;
+
+option go_package = "github.com/laenen-partners/jobs/gen/jobs/v1;jobsv1";
+
+import "entitystore/v1/options.proto";
+import "google/protobuf/timestamp.proto";
+
+// JobStatus enumerates the lifecycle states of a job or step.
+enum JobStatus {
+  JOB_STATUS_UNSPECIFIED = 0;
+  JOB_STATUS_PENDING = 1;
+  JOB_STATUS_RUNNING = 2;
+  JOB_STATUS_COMPLETED = 3;
+  JOB_STATUS_FAILED = 4;
+  JOB_STATUS_CANCELLED = 5;
+}
+
+message Job {
+  option (entitystore.v1.message) = {
+    match_thresholds: {auto_match: 0.95, review_zone: 0.80}
+    allowed_relations: [
+      "owned_by",
+      "assigned_to",
+      "created_from",
+      "processes",
+      "produces",
+      "step_of"
+    ]
+  };
+
+  // Anchor: workflow_id uniquely identifies a job.
+  string workflow_id = 1 [(entitystore.v1.field) = {
+    anchor: true
+    similarity: SIMILARITY_FUNCTION_EXACT
+    weight: 0.50
+    conflict_strategy: CONFLICT_STRATEGY_FLAG_FOR_REVIEW
+  }];
+
+  // Job type for categorization and filtering.
+  string job_type = 2 [(entitystore.v1.field) = {
+    similarity: SIMILARITY_FUNCTION_EXACT
+    weight: 0.50
+    normalizer: NORMALIZER_LOWERCASE_TRIM
+  }];
+
+  // Current lifecycle status.
+  JobStatus status = 3;
+
+  // Error message (populated on failure).
+  string error = 4;
+
+  // In-flight progress tracking.
+  Progress progress = 5;
+
+  // Primary input payload (max 1 MiB).
+  bytes input = 6;
+
+  // Primary output payload (max 1 MiB).
+  bytes output = 7;
+
+  // Ancillary caller metadata — routing hints, tracing data, config (max 64 KiB).
+  bytes metadata = 8;
+}
+
+// JobStep is a tracked unit of work within a job, stored as a separate
+// EntityStore entity linked to the parent job via a step_of relation.
+message JobStep {
+  option (entitystore.v1.message) = {
+    match_thresholds: {auto_match: 0.95, review_zone: 0.80}
+    allowed_relations: [
+      "step_of"
+    ]
+  };
+
+  // Step name (e.g. "download", "convert", "extract").
+  string name = 1 [(entitystore.v1.field) = {
+    similarity: SIMILARITY_FUNCTION_EXACT
+    weight: 1.0
+    normalizer: NORMALIZER_LOWERCASE_TRIM
+  }];
+
+  // Ordering within the parent job (0-based).
+  int32 sequence = 2;
+
+  // Current lifecycle status (running, completed, failed).
+  JobStatus status = 3;
+
+  // Error message (populated on failure).
+  string error = 4;
+
+  // Step input payload (max 256 KiB).
+  bytes input = 5;
+
+  // Step output payload (max 256 KiB).
+  bytes output = 6;
+
+  // When the step started.
+  google.protobuf.Timestamp started_at = 7;
+
+  // When the step completed (success or failure).
+  google.protobuf.Timestamp completed_at = 8;
+}
+
+message Progress {
+  string step = 1;
+  int32 current = 2;
+  int32 total = 3;
+  string message = 4;
+  google.protobuf.Timestamp updated_at = 5;
+}
