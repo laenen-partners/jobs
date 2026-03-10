@@ -4,7 +4,8 @@ go 1.25.6
 
 require (
 	github.com/dbos-inc/dbos-transact-golang v0.11.0
-	github.com/laenen-partners/jobs v0.0.0
+	github.com/laenen-partners/entitystore v0.1.2
+	github.com/laenen-partners/jobs v0.1.1
 )
 
 require (
@@ -16,14 +17,8 @@ require (
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/pgx/v5 v5.8.0 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
-	github.com/laenen-partners/entitystore v0.0.0 // indirect
 	github.com/robfig/cron/v3 v3.0.1 // indirect
 	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/text v0.33.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
-)
-
-replace (
-	github.com/laenen-partners/entitystore => ../../entitystore
-	github.com/laenen-partners/jobs => ../
 )
