@@ -75,16 +75,29 @@ func (c *Client) StartStep(ctx context.Context, jobID string, params StartStepPa
 		return nil, err
 	}
 
-	resp, err := c.entities.InsertEntity(ctx, connect.NewRequest(&entitystorev1.InsertEntityRequest{
-		EntityType: StepEntityType,
-		Data:       dataBytes,
-		Tags:       []string{StatusRunning},
+	resp, err := c.entities.BatchWrite(ctx, connect.NewRequest(&entitystorev1.BatchWriteRequest{
+		Operations: []*entitystorev1.BatchWriteOp{
+			{Operation: &entitystorev1.BatchWriteOp_WriteEntity{
+				WriteEntity: &entitystorev1.WriteEntityOp{
+					Action:          entitystorev1.WriteAction_WRITE_ACTION_CREATE,
+					EntityType:      StepEntityType,
+					Data:            dataBytes,
+					Tags:            []string{StatusRunning},
+					SourceUrn:       "system:jobs",
+					ModelId:         "jobs",
+					Fields:          []string{"name", "sequence", "status", "input", "started_at"},
+					MatchMethod:     "direct",
+					MatchConfidence: 1.0,
+				},
+			}},
+		},
 	}))
 	if err != nil {
 		return nil, fmt.Errorf("jobs: create step entity: %w", err)
 	}
 
-	stepID := resp.Msg.Entity.Id
+	stepEntity := resp.Msg.Results[0].GetEntity()
+	stepID := stepEntity.Id
 
 	// Link step to parent job.
 	if err := c.upsertRelation(ctx, stepID, jobID, RelStepOf); err != nil {
@@ -106,8 +119,8 @@ func (c *Client) StartStep(ctx context.Context, jobID string, params StartStepPa
 		Status:    StatusRunning,
 		Input:     params.Input,
 		StartedAt: now.AsTime(),
-		CreatedAt: resp.Msg.Entity.CreatedAt,
-		UpdatedAt: resp.Msg.Entity.UpdatedAt,
+		CreatedAt: stepEntity.CreatedAt,
+		UpdatedAt: stepEntity.UpdatedAt,
 	}, nil
 }
 
@@ -128,9 +141,22 @@ func (c *Client) CompleteStep(ctx context.Context, stepID string, params Complet
 		return err
 	}
 
-	_, err = c.entities.UpdateEntity(ctx, connect.NewRequest(&entitystorev1.UpdateEntityRequest{
-		Id:   stepID,
-		Data: dataBytes,
+	_, err = c.entities.BatchWrite(ctx, connect.NewRequest(&entitystorev1.BatchWriteRequest{
+		Operations: []*entitystorev1.BatchWriteOp{
+			{Operation: &entitystorev1.BatchWriteOp_WriteEntity{
+				WriteEntity: &entitystorev1.WriteEntityOp{
+					Action:          entitystorev1.WriteAction_WRITE_ACTION_MERGE,
+					MatchedEntityId: stepID,
+					EntityType:      StepEntityType,
+					Data:            dataBytes,
+					SourceUrn:       "system:jobs",
+					ModelId:         "jobs",
+					Fields:          []string{"status", "output", "completed_at"},
+					MatchMethod:     "direct",
+					MatchConfidence: 1.0,
+				},
+			}},
+		},
 	}))
 	if err != nil {
 		return fmt.Errorf("jobs: update step entity: %w", err)
@@ -160,9 +186,22 @@ func (c *Client) FailStep(ctx context.Context, stepID string, stepErr string) er
 		return err
 	}
 
-	_, err = c.entities.UpdateEntity(ctx, connect.NewRequest(&entitystorev1.UpdateEntityRequest{
-		Id:   stepID,
-		Data: dataBytes,
+	_, err = c.entities.BatchWrite(ctx, connect.NewRequest(&entitystorev1.BatchWriteRequest{
+		Operations: []*entitystorev1.BatchWriteOp{
+			{Operation: &entitystorev1.BatchWriteOp_WriteEntity{
+				WriteEntity: &entitystorev1.WriteEntityOp{
+					Action:          entitystorev1.WriteAction_WRITE_ACTION_MERGE,
+					MatchedEntityId: stepID,
+					EntityType:      StepEntityType,
+					Data:            dataBytes,
+					SourceUrn:       "system:jobs",
+					ModelId:         "jobs",
+					Fields:          []string{"status", "error", "completed_at"},
+					MatchMethod:     "direct",
+					MatchConfidence: 1.0,
+				},
+			}},
+		},
 	}))
 	if err != nil {
 		return fmt.Errorf("jobs: update step entity: %w", err)

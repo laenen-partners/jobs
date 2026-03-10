@@ -202,17 +202,32 @@ func (c *Client) Publish(ctx context.Context, params PublishParams) (*Job, error
 	// Build tags: status tag + caller-provided tags.
 	tags := append([]string{StatusPending}, params.Tags...)
 
-	// Create the job entity with tags.
-	resp, err := c.entities.InsertEntity(ctx, connect.NewRequest(&entitystorev1.InsertEntityRequest{
-		EntityType: EntityType,
-		Data:       dataBytes,
-		Tags:       tags,
+	// Build BatchWrite operations: create entity + wire relationships atomically.
+	ops := []*entitystorev1.BatchWriteOp{
+		{Operation: &entitystorev1.BatchWriteOp_WriteEntity{
+			WriteEntity: &entitystorev1.WriteEntityOp{
+				Action:          entitystorev1.WriteAction_WRITE_ACTION_CREATE,
+				EntityType:      EntityType,
+				Data:            dataBytes,
+				Tags:            tags,
+				SourceUrn:       "system:jobs",
+				ModelId:         "jobs",
+				Fields:          []string{"workflow_id", "job_type", "status", "input", "metadata"},
+				MatchMethod:     "direct",
+				MatchConfidence: 1.0,
+			},
+		}},
+	}
+
+	resp, err := c.entities.BatchWrite(ctx, connect.NewRequest(&entitystorev1.BatchWriteRequest{
+		Operations: ops,
 	}))
 	if err != nil {
 		return nil, fmt.Errorf("jobs: create entity: %w", err)
 	}
 
-	jobID := resp.Msg.Entity.Id
+	entity := resp.Msg.Results[0].GetEntity()
+	jobID := entity.Id
 	slog.InfoContext(ctx, "jobs: published",
 		"job_id", jobID,
 		"workflow_id", params.WorkflowID,
@@ -251,8 +266,8 @@ func (c *Client) Publish(ctx context.Context, params PublishParams) (*Job, error
 		Input:      params.Input,
 		Metadata:   params.Metadata,
 		Tags:       tags,
-		CreatedAt:  resp.Msg.Entity.CreatedAt,
-		UpdatedAt:  resp.Msg.Entity.UpdatedAt,
+		CreatedAt:  entity.CreatedAt,
+		UpdatedAt:  entity.UpdatedAt,
 	}, nil
 }
 
@@ -288,9 +303,22 @@ func (c *Client) Finalize(ctx context.Context, jobID string, params FinalizePara
 	}
 
 	// Update entity data.
-	_, err = c.entities.UpdateEntity(ctx, connect.NewRequest(&entitystorev1.UpdateEntityRequest{
-		Id:   jobID,
-		Data: dataBytes,
+	_, err = c.entities.BatchWrite(ctx, connect.NewRequest(&entitystorev1.BatchWriteRequest{
+		Operations: []*entitystorev1.BatchWriteOp{
+			{Operation: &entitystorev1.BatchWriteOp_WriteEntity{
+				WriteEntity: &entitystorev1.WriteEntityOp{
+					Action:          entitystorev1.WriteAction_WRITE_ACTION_MERGE,
+					MatchedEntityId: jobID,
+					EntityType:      EntityType,
+					Data:            dataBytes,
+					SourceUrn:       "system:jobs",
+					ModelId:         "jobs",
+					Fields:          []string{"status", "error", "output"},
+					MatchMethod:     "direct",
+					MatchConfidence: 1.0,
+				},
+			}},
+		},
 	}))
 	if err != nil {
 		return fmt.Errorf("jobs: update entity: %w", err)
@@ -336,9 +364,22 @@ func (c *Client) ReportProgress(ctx context.Context, jobID string, p Progress) e
 		return err
 	}
 
-	_, err = c.entities.UpdateEntity(ctx, connect.NewRequest(&entitystorev1.UpdateEntityRequest{
-		Id:   jobID,
-		Data: dataBytes,
+	_, err = c.entities.BatchWrite(ctx, connect.NewRequest(&entitystorev1.BatchWriteRequest{
+		Operations: []*entitystorev1.BatchWriteOp{
+			{Operation: &entitystorev1.BatchWriteOp_WriteEntity{
+				WriteEntity: &entitystorev1.WriteEntityOp{
+					Action:          entitystorev1.WriteAction_WRITE_ACTION_MERGE,
+					MatchedEntityId: jobID,
+					EntityType:      EntityType,
+					Data:            dataBytes,
+					SourceUrn:       "system:jobs",
+					ModelId:         "jobs",
+					Fields:          []string{"status", "progress"},
+					MatchMethod:     "direct",
+					MatchConfidence: 1.0,
+				},
+			}},
+		},
 	}))
 	if err != nil {
 		return fmt.Errorf("jobs: update progress: %w", err)
@@ -435,10 +476,17 @@ func (c *Client) Cancel(ctx context.Context, jobID string) error {
 }
 
 func (c *Client) upsertRelation(ctx context.Context, sourceID, targetID, relationType string) error {
-	_, err := c.entities.UpsertRelation(ctx, connect.NewRequest(&entitystorev1.UpsertRelationRequest{
-		SourceId:     sourceID,
-		TargetId:     targetID,
-		RelationType: relationType,
+	_, err := c.entities.BatchWrite(ctx, connect.NewRequest(&entitystorev1.BatchWriteRequest{
+		Operations: []*entitystorev1.BatchWriteOp{
+			{Operation: &entitystorev1.BatchWriteOp_UpsertRelation{
+				UpsertRelation: &entitystorev1.UpsertRelationOp{
+					SourceId:     sourceID,
+					TargetId:     targetID,
+					RelationType: relationType,
+					SourceUrn:    "system:jobs",
+				},
+			}},
+		},
 	}))
 	return err
 }
