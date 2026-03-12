@@ -199,8 +199,11 @@ func (c *Client) Publish(ctx context.Context, params PublishParams) (*Job, error
 		return nil, err
 	}
 
-	// Build tags: status tag + caller-provided tags.
+	// Build tags: status tag + caller-provided tags + input ID tags.
 	tags := append([]string{StatusPending}, params.Tags...)
+	for _, id := range params.InputIDs {
+		tags = append(tags, "input:"+id)
+	}
 
 	// Build BatchWrite operations: create entity + wire relationships atomically.
 	ops := []*entitystorev1.BatchWriteOp{
@@ -324,10 +327,14 @@ func (c *Client) Finalize(ctx context.Context, jobID string, params FinalizePara
 		return fmt.Errorf("jobs: update entity: %w", err)
 	}
 
-	// Replace status tags: set final status, remove transient ones.
+	// Replace status tags: set final status, remove transient ones, add output ID tags.
+	finalTags := rebuildTags(current.Tags, params.Status)
+	for _, id := range params.OutputIDs {
+		finalTags = append(finalTags, "output:"+id)
+	}
 	if _, err := c.entities.SetTags(ctx, connect.NewRequest(&entitystorev1.SetTagsRequest{
 		EntityId: jobID,
-		Tags:     rebuildTags(current.Tags, params.Status),
+		Tags:     finalTags,
 	})); err != nil {
 		return fmt.Errorf("jobs: set final tags: %w", err)
 	}
