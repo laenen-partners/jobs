@@ -9,4 +9,8 @@ var (
 	// ErrAlreadyFinalized is returned when attempting to finalize a job that
 	// is already in a terminal state (completed, failed, cancelled).
 	ErrAlreadyFinalized = errors.New("jobs: already finalized")
+
+	// ErrNoStore is returned when a direct operation is called on a Client
+	// with no backing store (e.g. NoopClient).
+	ErrNoStore = errors.New("jobs: no store configured")
 )

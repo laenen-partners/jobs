@@ -1,8 +1,6 @@
 # Jobs SDK
 
-Go SDK for durable job tracking built on [EntityStore](https://github.com/laenen-partners/entitystore). Provides a high-level abstraction for creating, tracking, and querying long-running jobs across services.
-
-Jobs are stored as EntityStore entities with a proto-defined schema (`jobs.v1.Job`) that includes matching annotations, a status enum, and relationship constraints.
+Store-agnostic Go SDK for durable job tracking. Provides a high-level abstraction for creating, tracking, and querying long-running jobs across services with pluggable persistence.
 
 ## Install
 
@@ -10,598 +8,326 @@ Jobs are stored as EntityStore entities with a proto-defined schema (`jobs.v1.Jo
 go get github.com/laenen-partners/jobs
 ```
 
-For DBOS workflow integration:
-
-```sh
-go get github.com/laenen-partners/jobs/dbosutil
-```
-
 ## Quick start
 
 ```go
 import (
+    "github.com/jackc/pgx/v5/pgxpool"
     "github.com/laenen-partners/jobs"
-    "github.com/laenen-partners/entitystore/gen/entitystore/v1/entitystorev1connect"
+    jobspg "github.com/laenen-partners/jobs/postgres"
 )
 
-// Create client.
-esClient := entitystorev1connect.NewEntityStoreServiceClient(
-    http.DefaultClient,
-    "http://localhost:3002",
-)
-client := jobs.NewClient(esClient)
+pool, _ := pgxpool.New(ctx, connString)
 
-// Publish a job.
+// Run migrations (optional — uses "jobs" scope by default).
+jobspg.Migrate(ctx, pool, "")
+
+// Create client with Postgres backend.
+client := jobs.NewClient(jobspg.NewStore(pool))
+
+// Or without tracking.
+client := jobs.NoopClient()
+```
+
+## Jobs
+
+A **job** represents a unit of work with a full lifecycle: creation, progress tracking, step execution, and completion or failure.
+
+### Publishing a job
+
+```go
 job, err := client.Publish(ctx, jobs.PublishParams{
-    WorkflowID: "wf-123",
-    JobType:    "file_processing",
-    OwnerID:    "user-456",
-    InputIDs:   []string{"doc-789"},
+    ExternalReference: "wf-123",
+    JobType:           "file_processing",
+    Tags:              []string{"owner:user-456", "input:doc-789", "priority:high"},
+    Input:             inputJSON,    // optional, max 1 MiB
+    Metadata:          metaJSON,     // optional, max 64 KiB
 })
+```
 
-// Report progress.
+The job starts with status `pending`. Tags are user-defined — use them for ownership, classification, filtering, or anything else.
+
+### Progress
+
+```go
 err = client.ReportProgress(ctx, job.ID, jobs.Progress{
     Step:    "converting",
     Current: 3,
     Total:   10,
     Message: "Converting page 3 of 10",
 })
+```
 
-// Track steps within the job.
+The first progress report transitions the job from `pending` to `running`.
+
+### Steps
+
+Steps are tracked units of work within a job, each with their own status and timing.
+
+```go
 step, err := client.StartStep(ctx, job.ID, jobs.StartStepParams{
-    Name:     "convert",
-    Sequence: 0,
-    Input:    []byte(`{"format": "pdf"}`),
+    Name: "convert", Sequence: 0,
 })
 // ... do work ...
 err = client.CompleteStep(ctx, step.ID, jobs.CompleteStepParams{
-    Output: []byte(`{"pages": 10}`),
+    Output: outputJSON,
 })
+// or on failure:
+err = client.FailStep(ctx, step.ID, "unsupported format")
+```
 
-// Finalize on completion.
+### Adding tags during execution
+
+```go
+err = client.AddTags(ctx, job.ID, []string{"output:doc-out-1"})
+```
+
+### Finalizing
+
+```go
 err = client.Finalize(ctx, job.ID, jobs.FinalizeParams{
-    Status:    jobs.StatusCompleted,
-    Output:    []byte(`{"pages": 10}`),
-    OutputIDs: []string{"doc-output-001"},
-})
-```
-
-## Concepts
-
-A **job** represents a unit of work that one service submits and another (or the same) service executes. The Jobs SDK models the full lifecycle — creation, progress tracking, completion or failure — as an EntityStore entity with typed relationships to the actors and data involved.
-
-### Key identifiers
-
-| Field | What it is | Example |
-|---|---|---|
-| **Job ID** | The EntityStore entity ID, assigned on creation. Used for all SDK operations (`Get`, `Finalize`, `ReportProgress`). | `"ent-a1b2c3"` |
-| **WorkflowID** | A caller-provided identifier that ties the job to an external workflow (typically a DBOS workflow UUID). Stored as an EntityStore **anchor** — guaranteed unique across all jobs. Use `GetByWorkflowID` to look up a job without knowing its entity ID. | `"wf-550e8400-..."` |
-| **JobType** | A classification string that describes what kind of work the job performs. Used for filtering (`ListFilter.JobType`) and for humans to understand what a job does. | `"file_processing"`, `"invoice_extraction"`, `"report_generation"` |
-
-### Relationships — who and what is involved
-
-Jobs don't exist in isolation. They are connected to other entities in the graph via directed relationships:
-
-| Concept | Relation | Param field | Description |
-|---|---|---|---|
-| **Owner** | `owned_by` | `OwnerID` | The user or service account that submitted the job. **Required.** Every job must have an owner for accountability and for querying ("show me my jobs"). |
-| **Team** | `assigned_to` | `TeamID` | The team or organization that is responsible for the job. Optional. Useful for multi-tenant systems where jobs need to be scoped to a team. |
-| **Inbox** | `created_from` | `InboxID` | The inbox or template that triggered the job. Optional. In document processing pipelines, an inbox defines the extraction rules and destination — linking the job back to it provides traceability. |
-| **Inputs** | `processes` | `InputIDs` | The entities that the job will process — documents, files, records, or any other EntityStore entity. These are the "raw materials" the job works on. Set at publish time. |
-| **Outputs** | `produces` | `OutputIDs` | The entities that the job created as a result of its work — extracted data, converted files, generated reports. Set at finalize time. |
-| **Steps** | `step_of` | *(via `StartStep`)* | Tracked units of work within a job — each step is a separate EntityStore entity linked to the parent job. Steps have their own status, input, output, and timing. |
-
-The input/output model creates a **provenance graph**: you can trace any output entity back through the job that produced it, to the input entities it was derived from, to the user who submitted it and the inbox rules that governed it.
-
-```
-User (owner)
-  │ owned_by
-  ▼
- Job ◄── Inbox (created_from)
-  │
-  ├── processes ──► Input Doc A
-  ├── processes ──► Input Doc B
-  │
-  ├── produces  ──► Output Entity X
-  └── produces  ──► Output Entity Y
-  │
-  Step A ──step_of──► Job
-  Step B ──step_of──► Job
-```
-
-**Example:** A file processing job receives two PDF documents (`InputIDs`), extracts structured data from them, and produces two JSON entities (`OutputIDs`). Later, you can query "which job produced Entity X?" or "what inputs were used to create this output?" by traversing the relationship graph.
-
-### Tags — fast filtering
-
-Tags are string labels attached to the job entity for fast filtering. The SDK automatically manages **status tags** (`pending`, `running`, `completed`, `failed`, `cancelled`) — when a job transitions state, the old status tag is replaced atomically.
-
-You can also pass custom tags via `PublishParams.Tags` for your own filtering needs:
-
-```go
-job, err := client.Publish(ctx, jobs.PublishParams{
-    // ...
-    Tags: []string{"priority:high", "env:production", "team:billing"},
-})
-
-// Later: find all high-priority completed jobs.
-results, err := client.List(ctx, jobs.ListFilter{
     Status: jobs.StatusCompleted,
-    Tags:   []string{"priority:high"},
+    Output: outputJSON,
+    Tags:   []string{"output:doc-out-1"},  // additional tags added on finalize
 })
 ```
 
-### Data payloads
+Terminal states (`completed`, `failed`, `cancelled`) cannot be changed. Returns `ErrAlreadyFinalized` on re-finalize.
 
-| Field | When set | Size limit | Purpose |
-|---|---|---|---|
-| **Input** (`PublishParams.Input`) | At publish time | 1 MiB | Primary input payload — the data the job will process. Stored in the proto `input` field. |
-| **Metadata** (`PublishParams.Metadata`) | At publish time | 64 KiB | Ancillary caller metadata — routing hints, tracing data, configuration. Stored in the proto `metadata` field. |
-| **Output** (`FinalizeParams.Output`) | At finalize time | 1 MiB | Primary output payload — summary statistics, extracted fields, results. Stored in the proto `output` field. |
+### Orchestrated lifecycle (Run/Step)
 
-All are `json.RawMessage` (arbitrary JSON bytes). The SDK enforces size limits to prevent unbounded storage growth.
-
-### Progress — tracking in-flight work
-
-Progress reports are optional but recommended for long-running jobs. Each progress update includes:
-
-| Field | Type | Description |
-|---|---|---|
-| `Step` | `string` | Named phase of the work (e.g. `"downloading"`, `"converting"`, `"extracting"`) |
-| `Current` | `int` | How many units are done |
-| `Total` | `int` | How many units total |
-| `Message` | `string` | Human-readable status message |
-| `UpdatedAt` | `time.Time` | Automatically set by the SDK |
-
-The first `ReportProgress` call transitions the job from `pending` to `running`.
-
-## Architecture
-
-```
-Your Service (file processor, pipeline, etc.)
-        │
-        ▼
-    Jobs SDK (this module)    ← Publish, Finalize, Get, List, StartStep, CompleteStep, ...
-        │
-        ▼
-EntityStore connect-go client ← InsertEntity, UpdateEntity, FindByAnchors, SetTags, ...
-        │
-        ▼
-EntityStore Service           ← Postgres (entities, relations, tags)
-```
-
-## Entity model
-
-Jobs are defined as a proto message with EntityStore annotations in [`proto/jobs/v1/job.proto`](proto/jobs/v1/job.proto):
-
-```protobuf
-enum JobStatus {
-  JOB_STATUS_UNSPECIFIED = 0;
-  JOB_STATUS_PENDING     = 1;
-  JOB_STATUS_RUNNING     = 2;
-  JOB_STATUS_COMPLETED   = 3;
-  JOB_STATUS_FAILED      = 4;
-  JOB_STATUS_CANCELLED   = 5;
-}
-
-message Job {
-  string    workflow_id = 1;  // anchor — globally unique
-  string    job_type    = 2;  // matching field (exact, lowercase-trim)
-  JobStatus status      = 3;  // enum-validated lifecycle state
-  string    error       = 4;
-  Progress  progress    = 5;
-  bytes     input       = 6;  // max 1 MiB
-  bytes     output      = 7;  // max 1 MiB
-  bytes     metadata    = 8;  // max 64 KiB
-}
-
-message JobStep {
-  string    name         = 1;  // matching field (exact, lowercase-trim)
-  int32     sequence     = 2;  // ordering within parent job
-  JobStatus status       = 3;
-  string    error        = 4;
-  bytes     input        = 5;  // max 256 KiB
-  bytes     output       = 6;  // max 256 KiB
-  Timestamp started_at   = 7;
-  Timestamp completed_at = 8;
-}
-```
-
-### Registering the match config
-
-If your service runs EntityStore matching, register the generated config:
+`Run` and `Step` handle the full lifecycle automatically with best-effort retries:
 
 ```go
-import (
-    "github.com/laenen-partners/entitystore/matching"
-    jobsv1 "github.com/laenen-partners/jobs/gen/jobs/v1"
-)
-
-registry := matching.NewMatchConfigRegistry()
-registry.Register(jobsv1.JobMatchConfig())
-registry.Register(jobsv1.JobStepMatchConfig())
-```
-
-## API reference
-
-### `NewClient(entities) *Client`
-
-Creates a Jobs SDK client backed by an EntityStore connect-go client.
-
-### `Publish(ctx, params) (*Job, error)`
-
-Creates a new job entity in EntityStore and wires up relationships.
-
-```go
-job, err := client.Publish(ctx, jobs.PublishParams{
-    WorkflowID: "wf-uuid",           // unique workflow identifier
-    JobType:    "file_processing",    // categorization
-    OwnerID:    "user-123",           // required — creates owned_by relation
-    TeamID:     "team-456",           // optional — creates assigned_to relation
-    InboxID:    "inbox-789",          // optional — creates created_from relation
-    InputIDs:   []string{"doc-1"},    // optional — creates processes relations
-    Tags:       []string{"priority"}, // optional — additional tags
-    Input:      inputJSON,            // optional — primary input payload (max 1 MiB)
-    Metadata:   metaJSON,             // optional — caller metadata (max 64 KiB)
+err := client.Run(ctx, jobs.RunParams{
+    ExternalReference: "wf-123",
+    JobType:           "file_processing",
+    Tags:              []string{"owner:user-123", "input:doc-1"},
+}, func(ctx context.Context, rc *jobs.RunContext) error {
+    for i, id := range inputIDs {
+        if err := client.Step(ctx, rc, "process:"+id, func(ctx context.Context) error {
+            return processFile(ctx, id)
+        }, jobs.WithSequence(i)); err != nil {
+            return err
+        }
+        rc.Progress(ctx, jobs.Progress{
+            Step: "processing", Current: i + 1, Total: len(inputIDs),
+        })
+    }
+    return nil
 })
 ```
 
-The job is created with status `pending` and a corresponding tag.
+### With DBOS workflows
 
-### `Finalize(ctx, jobID, params) error`
-
-Updates a job to a terminal state. Only accepts `completed`, `failed`, or `cancelled`.
+Use the direct methods (`Publish`, `Finalize`, `StartStep`, etc.) inside DBOS workflows. The job lifecycle is visible and explicit — DBOS handles workflow durability, the Jobs SDK handles job tracking:
 
 ```go
-err := client.Finalize(ctx, job.ID, jobs.FinalizeParams{
-    Status:    jobs.StatusCompleted,
-    Output:    outputJSON,                // max 1 MiB
-    OutputIDs: []string{"doc-output-1"},  // creates produces relations
-})
-```
-
-Returns `ErrAlreadyFinalized` if the job is already in a terminal state.
-
-### `ReportProgress(ctx, jobID, progress) error`
-
-Updates the job's progress and transitions status from `pending` to `running`.
-
-```go
-err := client.ReportProgress(ctx, job.ID, jobs.Progress{
-    Step:    "converting",
-    Current: 3,
-    Total:   10,
-    Message: "Converting page 3 of 10",
-})
-```
-
-The `UpdatedAt` timestamp is automatically set.
-
-### `Get(ctx, jobID) (*Job, error)`
-
-Retrieves a job by its EntityStore ID, hydrating all relationships (owner, team, inbox, inputs, outputs).
-
-### `GetByWorkflowID(ctx, workflowID) (*Job, error)`
-
-Retrieves a job by its `workflow_id` anchor using `FindByAnchors`. Returns `ErrNotFound` if no match.
-
-```go
-job, err := client.GetByWorkflowID(ctx, "wf-uuid")
-```
-
-### `List(ctx, filter) ([]Job, error)`
-
-Queries jobs with relationship, tag, and status filters. Filters are AND-combined.
-
-```go
-completed, err := client.List(ctx, jobs.ListFilter{
-    OwnerID: "user-123",
-    Status:  jobs.StatusCompleted,
-    JobType: "file_processing",
-    Limit:   25,
-    Offset:  0,
-})
-```
-
-| Filter | Description |
-|---|---|
-| `OwnerID` | Jobs with `owned_by` relation to this entity |
-| `TeamID` | Jobs with `assigned_to` relation to this entity |
-| `InboxID` | Jobs with `created_from` relation to this entity |
-| `Status` | Filter by status tag (validated against enum) |
-| `JobType` | Filter by `job_type` in entity data (client-side) |
-| `Tags` | Additional tag filters |
-| `Limit` | Max results (default 100) |
-| `Offset` | Skip first N results |
-
-### `Cancel(ctx, jobID) error`
-
-Shorthand for `Finalize` with `StatusCancelled`.
-
-### `StartStep(ctx, jobID, params) (*Step, error)`
-
-Creates a new step entity linked to a parent job. The step starts in `running` status with a `started_at` timestamp.
-
-```go
-step, err := client.StartStep(ctx, job.ID, jobs.StartStepParams{
-    Name:     "convert",       // step name (required)
-    Sequence: 0,               // ordering within the job
-    Input:    inputJSON,       // optional — max 256 KiB
-})
-```
-
-### `CompleteStep(ctx, stepID, params) error`
-
-Marks a step as completed with optional output data.
-
-```go
-err := client.CompleteStep(ctx, step.ID, jobs.CompleteStepParams{
-    Output: outputJSON,  // optional — max 256 KiB
-})
-```
-
-### `FailStep(ctx, stepID, errorMsg) error`
-
-Marks a step as failed with an error message.
-
-```go
-err := client.FailStep(ctx, step.ID, "conversion failed: unsupported format")
-```
-
-### `GetSteps(ctx, jobID) ([]Step, error)`
-
-Retrieves all steps linked to a job via `step_of` relations.
-
-```go
-steps, err := client.GetSteps(ctx, job.ID)
-for _, s := range steps {
-    fmt.Printf("Step %d (%s): %s\n", s.Sequence, s.Name, s.Status)
-}
-```
-
-## Relationships
-
-| Relation | Direction | Purpose |
-|---|---|---|
-| `owned_by` | Job → User | Who submitted the job |
-| `assigned_to` | Job → Team | Which team owns it |
-| `created_from` | Job → Inbox | Which inbox template was used |
-| `processes` | Job → Entity | Input documents/entities |
-| `produces` | Job → Entity | Output documents/entities |
-| `step_of` | Step → Job | Step belongs to parent job |
-
-## Status lifecycle
-
-```
-          Publish
-             │
-             ▼
-        ┌─────────┐
-        │ pending  │
-        └────┬─────┘
-             │ ReportProgress
-             ▼
-        ┌─────────┐
-        │ running  │
-        └──┬───┬───┘
-           │   │
-    ┌──────┘   └──────┐
-    ▼                  ▼
-┌───────────┐   ┌──────────┐   ┌───────────┐
-│ completed │   │  failed  │   │ cancelled │
-└───────────┘   └──────────┘   └───────────┘
-```
-
-Terminal states (`completed`, `failed`, `cancelled`) cannot be changed. Attempting to finalize a job that is already in a terminal state returns `ErrAlreadyFinalized`.
-
-## Safety guarantees
-
-- **Status validation** — Only known `JobStatus` enum values are accepted
-- **Terminal state guard** — Cannot re-finalize a completed/failed/cancelled job
-- **Size limits** — Input/output max 1 MiB, metadata max 64 KiB, step input/output max 256 KiB
-- **Atomic tag updates** — `SetTags` replaces all tags in one call
-- **Audit logging** — All state transitions logged via `slog.InfoContext` with job ID, status, owner, and previous status
-
-## Errors
-
-| Error | When |
-|---|---|
-| `ErrNotFound` | Job entity does not exist (`Get`, `GetByWorkflowID`) |
-| `ErrAlreadyFinalized` | Job is already completed/failed/cancelled (`Finalize`, `Cancel`) |
-
-Both are sentinel errors suitable for `errors.Is`:
-
-```go
-if errors.Is(err, jobs.ErrNotFound) {
-    // handle missing job
-}
-```
-
-## DBOS workflow integration
-
-The `dbosutil` subpackage wraps Jobs SDK methods as DBOS durable steps. This ensures job entity operations are checkpointed and survive workflow recovery — if a workflow crashes and restarts, DBOS replays the stored result without re-executing the EntityStore call.
-
-```sh
-go get github.com/laenen-partners/jobs/dbosutil
-```
-
-### Step wrappers
-
-| Function | DBOS Step Name | Description |
-|---|---|---|
-| `PublishStep` | `publish_job` | Creates job entity as a durable step |
-| `FinalizeStep` | `finalize_job` | Updates final state as a durable step |
-| `ProgressStep` | `job_progress_<step>` | Reports progress as a durable step |
-| `ProgressEvent` | *(not a step)* | Lightweight progress via DBOS events |
-
-### Example: File processing workflow
-
-```go
-package processor
-
-import (
-    "context"
-    "fmt"
-
-    "github.com/dbos-inc/dbos-transact-golang/dbos"
-
-    "github.com/laenen-partners/jobs"
-    "github.com/laenen-partners/jobs/dbosutil"
-)
-
-// Processor holds dependencies for the file processing workflow.
-type Processor struct {
-    jobs *jobs.Client
-}
-
-// ProcessFiles is a DBOS workflow that tracks its lifecycle as a job entity.
-func (p *Processor) ProcessFiles(ctx dbos.DBOSContext, input ProcessInput) (ProcessOutput, error) {
+func (p *Processor) ProcessFiles(ctx dbos.DBOSContext, input ProcessInput) error {
     workflowID, _ := dbos.GetWorkflowID(ctx)
 
-    // Publish the job entity (durable step — survives restarts).
-    job, err := dbosutil.PublishStep(ctx, p.jobs, jobs.PublishParams{
-        WorkflowID: workflowID,
-        JobType:    "file_processing",
-        OwnerID:    input.OwnerID,
-        InboxID:    input.InboxID,
-        InputIDs:   input.InputIDs,
-    })
+    // Publish the job as a durable step.
+    job, err := dbos.RunAsStep(ctx, func(sctx context.Context) (*jobs.Job, error) {
+        return p.jobs.Publish(sctx, jobs.PublishParams{
+            ExternalReference: workflowID,
+            JobType:           "file_processing",
+            Tags:              []string{"owner:" + input.OwnerID},
+        })
+    }, dbos.WithStepName("publish_job"))
     if err != nil {
-        return ProcessOutput{}, fmt.Errorf("publish job: %w", err)
+        return fmt.Errorf("publish job: %w", err)
     }
 
-    // Expose the job entity ID for external polling.
+    // Expose the job ID for external polling.
     _ = dbos.SetEvent(ctx, "job_entity_id", job.ID)
 
     // Ensure the job is finalized on all exit paths.
     var (
-        outputIDs   []string
         finalStatus = jobs.StatusCompleted
         finalErr    string
     )
     defer func() {
-        _ = dbosutil.FinalizeStep(ctx, p.jobs, job.ID, jobs.FinalizeParams{
-            Status:    finalStatus,
-            Error:     finalErr,
-            OutputIDs: outputIDs,
-        })
+        _, _ = dbos.RunAsStep(ctx, func(sctx context.Context) (any, error) {
+            return nil, p.jobs.Finalize(sctx, job.ID, jobs.FinalizeParams{
+                Status: finalStatus,
+                Error:  finalErr,
+            })
+        }, dbos.WithStepName("finalize_job"))
     }()
 
-    // Process each input, tracking as job steps.
+    // Process each input as a tracked step.
     for i, inputID := range input.InputIDs {
-        // Start a tracked step.
         step, _ := dbos.RunAsStep(ctx, func(sctx context.Context) (*jobs.Step, error) {
             return p.jobs.StartStep(sctx, job.ID, jobs.StartStepParams{
-                Name:     "process_file",
-                Sequence: i,
+                Name: "process", Sequence: i,
             })
         }, dbos.WithStepName(fmt.Sprintf("start_step_%d", i)))
 
-        // Do the actual work.
-        outputID, err := dbos.RunAsStep(ctx, func(sctx context.Context) (string, error) {
+        _, err := dbos.RunAsStep(ctx, func(sctx context.Context) (string, error) {
             return p.processFile(sctx, inputID)
-        }, dbos.WithStepName(fmt.Sprintf("process_file_%d", i)))
+        }, dbos.WithStepName(fmt.Sprintf("process_%d", i)))
+
         if err != nil {
-            // Mark step as failed.
-            _, _ = dbos.RunAsStep(ctx, func(sctx context.Context) (any, error) {
-                return nil, p.jobs.FailStep(sctx, step.ID, err.Error())
-            }, dbos.WithStepName(fmt.Sprintf("fail_step_%d", i)))
+            p.jobs.FailStep(ctx, step.ID, err.Error())
             finalStatus = jobs.StatusFailed
-            finalErr = fmt.Sprintf("process %s: %s", inputID, err)
-            return ProcessOutput{}, fmt.Errorf("process file %s: %w", inputID, err)
+            finalErr = err.Error()
+            return err
         }
+        p.jobs.CompleteStep(ctx, step.ID, jobs.CompleteStepParams{})
 
-        // Mark step as completed.
-        _, _ = dbos.RunAsStep(ctx, func(sctx context.Context) (any, error) {
-            return nil, p.jobs.CompleteStep(sctx, step.ID, jobs.CompleteStepParams{})
-        }, dbos.WithStepName(fmt.Sprintf("complete_step_%d", i)))
-
-        outputIDs = append(outputIDs, outputID)
+        p.jobs.ReportProgress(ctx, job.ID, jobs.Progress{
+            Step: "processing", Current: i + 1, Total: len(input.InputIDs),
+        })
     }
-
-    return ProcessOutput{
-        JobID:     job.ID,
-        OutputIDs: outputIDs,
-    }, nil
+    return nil
 }
 ```
 
-### Polling job status from outside the workflow
+Every job operation is a visible call — no hidden lifecycle. DBOS `RunAsStep` checkpoints the work for replay on recovery. The defer ensures finalize runs on both success and failure paths.
 
-Callers that start the workflow can poll for the job entity ID via DBOS events, then use the Jobs SDK to check status:
+### Querying
 
 ```go
-// Start the workflow.
-handle, err := dbos.StartWorkflow(ctx, processor.ProcessFiles, input)
-if err != nil {
-    return err
-}
+job, err := client.Get(ctx, jobID)
+job, err := client.GetByExternalReference(ctx, "wf-123")
 
-// Wait for the job entity ID to be available.
-jobEntityID, err := dbos.GetEvent[string](ctx, handle.WorkflowID, "job_entity_id", 30*time.Second)
-if err != nil {
-    return fmt.Errorf("waiting for job entity: %w", err)
-}
-
-// Poll the job status via the Jobs SDK.
-job, err := jobsClient.Get(ctx, jobEntityID)
-fmt.Printf("Job %s is %s (%d/%d)\n", job.ID, job.Status, job.Progress.Current, job.Progress.Total)
-
-// Or look up by workflow ID directly.
-job, err = jobsClient.GetByWorkflowID(ctx, handle.WorkflowID)
+// All completed jobs for a user (AND filter).
+results, err := client.List(ctx, jobs.ListFilter{
+    Tags:  []string{"completed", "owner:user-123"},
+    Limit: 25,
+})
 ```
 
-### Lightweight progress (no EntityStore writes)
+### Tags
 
-For high-frequency progress updates where durability isn't needed, use `ProgressEvent` instead of `ProgressStep`. This publishes progress via DBOS's event system without writing to EntityStore:
+Tags are the primary filtering mechanism. The SDK automatically manages **status tags** (`pending`, `running`, `completed`, `failed`, `cancelled`). All other tags are user-defined.
+
+Common patterns:
+
+| Tag | Purpose |
+|---|---|
+| `owner:<id>` | Who submitted the job |
+| `team:<id>` | Which team owns it |
+| `type:<job_type>` | Job classification |
+| `input:<id>` | Input entity references |
+| `output:<id>` | Output entity references |
+| `priority:high` | Custom filtering |
+
+### Key identifiers
+
+| Field | Purpose |
+|---|---|
+| **Job ID** | UUID assigned on creation. Used for all operations. |
+| **ExternalReference** | Caller-provided idempotency key (e.g. DBOS workflow ID). Globally unique. |
+| **JobType** | Classification string stored in job data. |
+
+### Status lifecycle
+
+```
+       Publish
+          |
+          v
+      [pending]
+          |  ReportProgress
+          v
+      [running]
+        / | \
+       v  v  v
+[completed] [failed] [cancelled]
+```
+
+### Errors
+
+| Error | When |
+|---|---|
+| `ErrNotFound` | Job does not exist |
+| `ErrAlreadyFinalized` | Job already in terminal state |
+| `ErrNoStore` | Client has no backing store (NoopClient) |
+
+## JobStore
+
+The `JobStore` interface is the persistence contract. Implement it to plug in any backend.
 
 ```go
-// Inside the workflow — frequent, lightweight updates.
-for i, page := range pages {
-    _ = dbosutil.ProgressEvent(ctx, jobs.Progress{
-        Step:    "ocr",
-        Current: i + 1,
-        Total:   len(pages),
-    })
-    processPage(page)
-}
+type JobStore interface {
+    // Job lifecycle
+    CreateJob(ctx context.Context, params PublishParams) (*Job, error)
+    FinalizeJob(ctx context.Context, jobID string, params FinalizeParams) error
+    ReportProgress(ctx context.Context, jobID string, p Progress) error
 
-// Outside the workflow — poll progress.
-progress, err := dbos.GetEvent[jobs.Progress](ctx, workflowID, "progress", timeout)
+    // Step lifecycle
+    StartStep(ctx context.Context, jobID string, params StartStepParams) (*Step, error)
+    CompleteStep(ctx context.Context, stepID string, params CompleteStepParams) error
+    FailStep(ctx context.Context, stepID string, errMsg string) error
+
+    // Tags
+    AddTags(ctx context.Context, jobID string, tags []string) error
+
+    // Queries
+    GetJob(ctx context.Context, jobID string) (*Job, error)
+    GetJobByExternalReference(ctx context.Context, externalReference string) (*Job, error)
+    ListJobs(ctx context.Context, filter ListFilter) ([]Job, error)
+    GetSteps(ctx context.Context, jobID string) ([]Step, error)
+}
 ```
+
+The Client handles validation, retries, and Run/Step orchestration. The JobStore only handles persistence.
+
+### Postgres backend
+
+The `postgres/` subpackage provides a ready-to-use implementation backed by Postgres with SQLC-generated queries and goose migrations.
+
+```go
+import (
+    "github.com/jackc/pgx/v5/pgxpool"
+    jobspg "github.com/laenen-partners/jobs/postgres"
+)
+
+pool, _ := pgxpool.New(ctx, connString)
+
+// Run migrations (custom scope, or "" for default "jobs").
+jobspg.Migrate(ctx, pool, "")
+
+store := jobspg.NewStore(pool)
+client := jobs.NewClient(store)
+```
+
+### Custom backend
+
+Implement `jobs.JobStore` with your own storage:
+
+```go
+type myStore struct { db *sql.DB }
+
+func (s *myStore) CreateJob(ctx context.Context, params jobs.PublishParams) (*jobs.Job, error) {
+    // your implementation
+}
+// ... implement all 11 methods ...
+
+client := jobs.NewClient(&myStore{db: db})
+```
+
+Exported helpers available for custom implementations: `ValidateStatus`, `RebuildTags`, `HasAllTags`, `ValidateData`.
 
 ## Project structure
 
 ```
-proto/jobs/v1/
-  job.proto              Job and Progress proto definitions with EntityStore annotations
-gen/jobs/v1/
-  job.pb.go              Generated protobuf Go code (never edit)
-  job_entitystore.go     Generated EntityStore match config (never edit)
-jobs.go                  Core Client, Job type, PublishParams, FinalizeParams
-steps.go                 Step tracking (StartStep, CompleteStep, FailStep, GetSteps)
-jobs_test.go             Tests (mock EntityStore client)
-list.go                  ListFilter with pagination
-errors.go                Sentinel errors (ErrNotFound, ErrAlreadyFinalized)
-dbosutil/
-  dbosutil.go            DBOS durable step wrappers
-buf.yaml                 Buf module config (depends on buf.build/laenen-partners/entitystore)
-buf.gen.yaml             Code generation (protobuf, connect, protoc-gen-entitystore)
-Taskfile.yml             Task runner commands
-mise.toml                Tool versions (go, buf, task)
-.github/workflows/
-  ci.yml                 GitHub Actions CI (lint, build, vet, test)
-```
+jobs.go                Pure Go types: Job, Step, Progress, Status, all Params
+store.go               JobStore interface (persistence contract)
+client.go              Client: orchestration, validation, Run/Step lifecycle
+errors.go              Sentinel errors
+jobs_test.go           Unit tests with in-memory mock JobStore
 
-## Development
+postgres/              Postgres backend (implements jobs.JobStore)
+  pgstore.go           NewStore(pool) -> jobs.JobStore
+  migrate.go           Scoped migrations with embedded SQL
+  sqlc.yaml            SQLC code generation config
+  db/migrations/       SQL migration files
+  db/queries/          SQLC query definitions
+  internal/dbgen/      Generated SQLC code (never edit)
 
-```sh
-mise install          # install tools from mise.toml
-task generate         # buf dep update && buf generate
-task build            # go build ./...
-task test             # go test -v -count=1 ./...
-task test:cover       # run tests with coverage
-task lint             # buf lint
-task tidy             # go mod tidy (all modules)
+Taskfile.yml           Task runner
+mise.toml              Tool versions
 ```
 
 ## License

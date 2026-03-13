@@ -1,40 +1,37 @@
 # Jobs SDK
 
-Go SDK for durable job tracking built on top of EntityStore. Provides a high-level abstraction for creating, tracking, and querying jobs across services.
+Store-agnostic Go SDK for durable job tracking. Provides a high-level abstraction for creating, tracking, and querying jobs across services with pluggable persistence.
 
 See `~/.claude/CLAUDE.md` for org-wide Go service standards.
 
 ## Quick reference
 
 - **Type:** SDK / Go library (not a standalone service)
-- **Backing store:** EntityStore (via connect-go client)
-- **DBOS integration:** Optional, via `dbosutil` subpackage
-- **Entity types:** `jobs.v1.Job` and `jobs.v1.JobStep` in EntityStore (proto-qualified)
-- **Proto schema:** `proto/jobs/v1/job.proto` with EntityStore matching annotations
-- **BSR dependency:** `buf.build/laenen-partners/entitystore`
+- **Persistence:** Pluggable via `JobStore` interface — bring your own backend
+- **Postgres backend:** `postgres/` subpackage (SQLC + goose migrations)
+- **Core package deps:** Zero — pure Go types, no heavy imports
+- **Filtering:** Tag-based (AND). Status, job type, ownership — all expressed as tags.
 
 ## Project structure
 
 ```
-proto/jobs/v1/
-  job.proto            Job and Progress proto definitions with EntityStore annotations
-gen/jobs/v1/
-  job.pb.go            Generated protobuf Go code (never edit)
-  job_entitystore.go   Generated EntityStore match config (never edit)
-jobs.go                Core Client, Job type, PublishParams, FinalizeParams
-steps.go               Step tracking (StartStep, CompleteStep, FailStep, GetSteps)
-jobs_test.go           Tests (mock EntityStore client)
-list.go                ListFilter → EntityStore query translation (with pagination)
-errors.go              Sentinel errors
-dbosutil/
-  dbosutil.go          DBOS durable step wrappers (PublishStep, FinalizeStep, ProgressEvent)
-buf.yaml               Buf module config with BSR dependency
-buf.gen.yaml           Code generation config (protobuf, connect, entitystore)
+jobs.go                Pure Go types: Job, Step, Progress, Status, all Params
+store.go               JobStore interface (11 methods — the persistence contract)
+client.go              Client: orchestration, validation, Run/Step lifecycle
+errors.go              Sentinel errors (ErrNotFound, ErrAlreadyFinalized, ErrNoStore)
+jobs_test.go           Unit tests with in-memory mock JobStore
+
+postgres/              Postgres backend (implements jobs.JobStore)
+  pgstore.go           NewStore(pool) → jobs.JobStore, SQLC query wrappers
+  migrate.go           Scoped migrations with embedded SQL
+  sqlc.yaml            SQLC code generation config
+  db/migrations/       SQL migration files (goose format)
+  db/queries/          SQLC query definitions (jobs.sql, steps.sql)
+  internal/dbgen/      Generated SQLC code (never edit)
+
 Taskfile.yml           Task runner commands
-mise.toml              Tool versions (go, buf, task)
-.github/workflows/
-  ci.yml               GitHub Actions CI (lint, build, vet, test)
-go.mod                 Depends on: entitystore (connect-go client), optionally dbos
+mise.toml              Tool versions (go, sqlc, task)
+go.mod                 Module dependencies
 ```
 
 ## Architecture
@@ -43,112 +40,105 @@ go.mod                 Depends on: entitystore (connect-go client), optionally d
 FileProcessor / Any Service
         │
         ▼
-    Jobs SDK (this module)    ← Publish, Finalize, Get, List, StartStep, CompleteStep, ...
+    Jobs SDK (this module)       ← Client: Run, Step, Publish, Finalize, Get, List
         │
         ▼
-EntityStore connect-go client ← InsertEntity, UpdateEntity, FindByAnchors, SetTags, ...
+    JobStore interface           ← Pluggable persistence (11 methods)
         │
-        ▼
-EntityStore Service           ← Postgres (entities, relations, tags)
+   ┌────┴────────────────┐
+   ▼                     ▼
+Postgres backend      Custom backend
+(postgres/)           (your own impl)
+   │
+   ▼
+PostgreSQL            ← jobs + job_steps tables, GIN-indexed tags
 ```
 
-## Entity model
+## JobStore interface
 
-Jobs are defined as a proto message (`jobs.v1.Job`) with EntityStore annotations:
+The `JobStore` interface is the persistence contract. Implement it to use any backend:
 
-- **Status enum:** `JobStatus` proto enum (PENDING, RUNNING, COMPLETED, FAILED, CANCELLED)
-- **Anchor:** `workflow_id` (exact match, globally unique per workflow)
-- **Matching field:** `job_type` (exact, lowercase-trim normalized)
-- **Thresholds:** auto_match=0.95, review_zone=0.80
-- **Allowed relations:** owned_by, assigned_to, created_from, processes, produces, step_of
-- **Size limits:** input/output max 1 MiB, metadata max 64 KiB, step input/output max 256 KiB
+```go
+type JobStore interface {
+    // Job lifecycle
+    CreateJob(ctx, params) (*Job, error)
+    FinalizeJob(ctx, jobID, params) error
+    ReportProgress(ctx, jobID, progress) error
 
-Data is serialized via `protojson` for storage in EntityStore's data field.
+    // Step lifecycle
+    StartStep(ctx, jobID, params) (*Step, error)
+    CompleteStep(ctx, stepID, params) error
+    FailStep(ctx, stepID, errMsg) error
 
-## Relationships
+    // Tags
+    AddTags(ctx, jobID, tags) error
 
-| Relation | Direction | Purpose |
-|---|---|---|
-| `owned_by` | Job → User | Who submitted the job |
-| `assigned_to` | Job → Team | Which team owns it |
-| `created_from` | Job → Inbox | Which inbox template was used |
-| `processes` | Job → Entity | Input documents/entities |
-| `produces` | Job → Entity | Output documents/entities |
-| `step_of` | Step → Job | Step belongs to parent job |
+    // Queries
+    GetJob(ctx, jobID) (*Job, error)
+    GetJobByExternalReference(ctx, externalReference) (*Job, error)
+    ListJobs(ctx, filter) ([]Job, error)
+    GetSteps(ctx, jobID) ([]Step, error)
+}
+```
 
-## Tags
+## Domain model
 
-Tags map to job lifecycle states for fast filtering:
+Jobs and steps are pure Go structs:
 
-- `pending`, `running`, `completed`, `failed`, `cancelled` — status
-- Additional caller-defined tags passed through
+- **Status:** `type Status string` with values: `pending`, `running`, `completed`, `failed`, `cancelled`
+- **Job:** ID, ExternalReference, JobType, Status, Progress, Error, Input/Output/Metadata (json.RawMessage), Tags, CreatedAt/UpdatedAt
+- **Step:** ID, JobID, Name, Sequence, Status, Error, Input/Output, StartedAt/CompletedAt
+- **ListFilter:** Tags (AND-combined), Limit, Offset
+- **Tags:** User-defined. Status is automatically managed as a tag. All filtering is tag-based.
+
+## Postgres backend
+
+The `postgres/` subpackage uses:
+- **SQLC** for type-safe SQL query generation
+- **migrate** (`github.com/laenen-partners/migrate`) for embedded SQL migrations with scoped tracking
+- **pgxpool** for connection pooling
+- **UUID** primary keys for jobs and steps
+- **text[] with GIN index** for tag-based filtering (`tags @> $1::text[]`)
+- **Terminal state guard in SQL:** `WHERE status NOT IN ('completed', 'failed', 'cancelled')` with `:execrows`
+
+## Tag conventions
+
+The SDK automatically manages status tags (`pending`, `running`, `completed`, `failed`, `cancelled`). All other tags are user-defined. Common patterns:
+
+- `owner:<id>` — who submitted the job
+- `team:<id>` — which team owns it
+- `type:<job_type>` — job classification
+- `input:<id>` — input entity references
+- `output:<id>` — output entity references
 
 ## Safety guarantees
 
-- **Status validation:** Only known `JobStatus` enum values are accepted
+- **Status validation:** Only known Status values accepted (Client validates before JobStore)
 - **Terminal state guard:** Cannot re-finalize a completed/failed/cancelled job (`ErrAlreadyFinalized`)
 - **Finalize requires terminal status:** Only completed/failed/cancelled accepted
-- **Size limits:** Input, Output, Metadata, and step data fields are bounded to prevent unbounded storage
-- **Tag consistency:** `SetTags` replaces all tags atomically (no silent swallowing)
+- **Size limits:** Input/Output max 1 MiB, Metadata max 64 KiB, Step I/O max 256 KiB
 - **Audit logging:** All state transitions logged with `slog.InfoContext` including previous status
 
 ## Usage
 
-### Registering the match config
+### With Postgres backend
 
 ```go
 import (
-    "github.com/laenen-partners/entitystore/matching"
-    jobsv1 "github.com/laenen-partners/jobs/gen/jobs/v1"
+    "github.com/jackc/pgx/v5/pgxpool"
+    "github.com/laenen-partners/jobs"
+    jobspg "github.com/laenen-partners/jobs/postgres"
 )
 
-mcr := matching.NewMatchConfigRegistry()
-mcr.Register(jobsv1.JobMatchConfig())
-mcr.Register(jobsv1.JobStepMatchConfig())
+pool, _ := pgxpool.New(ctx, connString)
+jobspg.Migrate(ctx, pool, "") // uses default "jobs" scope
+client := jobs.NewClient(jobspg.NewStore(pool))
 ```
 
-### Direct usage (no DBOS)
+### Without tracking (noop)
 
 ```go
-client := jobs.NewClient(entityStoreClient)
-
-job, err := client.Publish(ctx, jobs.PublishParams{
-    JobType:  "file_processing",
-    OwnerID:  "user-123",
-    InputIDs: []string{"doc-456"},
-})
-
-// Lookup by workflow ID (anchor-based).
-job, err = client.GetByWorkflowID(ctx, "workflow-uuid")
-
-// Track steps within the job.
-step, err := client.StartStep(ctx, job.ID, jobs.StartStepParams{
-    Name: "convert", Sequence: 0,
-})
-// ... do work ...
-err = client.CompleteStep(ctx, step.ID, jobs.CompleteStepParams{})
-
-err = client.Finalize(ctx, job.ID, jobs.FinalizeParams{
-    Status: jobs.StatusCompleted,
-    Output: outputJSON,
-})
-```
-
-### With DBOS workflows
-
-```go
-import "github.com/laenen-partners/jobs/dbosutil"
-
-func (p *Processor) MyWorkflow(ctx dbos.DBOSContext, input Input) (Output, error) {
-    job, err := dbosutil.PublishStep(ctx, p.jobs, jobs.PublishParams{...})
-    dbos.SetEvent(ctx, "job_entity_id", job.ID)
-
-    defer func() {
-        dbosutil.FinalizeStep(ctx, p.jobs, job.ID, jobs.FinalizeParams{...})
-    }()
-
-    // ... workflow steps ...
-}
+client := jobs.NoopClient()
 ```
 
 ## Code conventions
@@ -156,5 +146,6 @@ func (p *Processor) MyWorkflow(ctx dbos.DBOSContext, input Input) (Output, error
 - No `init()` functions.
 - Errors wrapped with `fmt.Errorf("context: %w", err)`.
 - Uses `slog.InfoContext` for structured logging (propagates context).
-- EntityStore is the only persistence dependency — no direct DB access.
-- Generated code in `gen/` — never edit manually. Regenerate with `task generate`.
+- Core package has zero heavy dependencies — pure Go types and interfaces.
+- Generated code in `postgres/internal/dbgen/` — never edit manually. Regenerate with `task generate`.
+- Exported helpers (`ValidateStatus`, `RebuildTags`, `HasAllTags`, `ValidateData`) available for custom JobStore implementations.
