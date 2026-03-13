@@ -77,14 +77,16 @@ const (
 	RelStepOf      = "step_of"
 )
 
-// Client provides high-level job operations over EntityStore.
-type Client struct {
+// Store provides low-level job projection operations over EntityStore.
+// It handles persisting job/step entities, relationships, and tags.
+// Use a Client implementation (e.g. NewDefaultClient) for the high-level Run/Step/Progress API.
+type Store struct {
 	entities entitystorev1connect.EntityStoreServiceClient
 }
 
-// NewClient creates a Jobs SDK client backed by the given EntityStore client.
-func NewClient(entities entitystorev1connect.EntityStoreServiceClient) *Client {
-	return &Client{entities: entities}
+// NewStore creates a job projection store backed by the given EntityStore client.
+func NewStore(entities entitystorev1connect.EntityStoreServiceClient) *Store {
+	return &Store{entities: entities}
 }
 
 // Job is the hydrated view of a job entity with its relationships resolved.
@@ -176,7 +178,7 @@ func validateStatus(status string) error {
 }
 
 // Publish creates a new job entity in EntityStore and wires up relationships.
-func (c *Client) Publish(ctx context.Context, params PublishParams) (*Job, error) {
+func (s *Store) Publish(ctx context.Context, params PublishParams) (*Job, error) {
 	if params.OwnerID == "" {
 		return nil, fmt.Errorf("jobs: owner_id is required")
 	}
@@ -222,7 +224,7 @@ func (c *Client) Publish(ctx context.Context, params PublishParams) (*Job, error
 		}},
 	}
 
-	resp, err := c.entities.BatchWrite(ctx, connect.NewRequest(&entitystorev1.BatchWriteRequest{
+	resp, err := s.entities.BatchWrite(ctx, connect.NewRequest(&entitystorev1.BatchWriteRequest{
 		Operations: ops,
 	}))
 	if err != nil {
@@ -239,24 +241,24 @@ func (c *Client) Publish(ctx context.Context, params PublishParams) (*Job, error
 	)
 
 	// Wire relationships.
-	if err := c.upsertRelation(ctx, jobID, params.OwnerID, RelOwnedBy); err != nil {
+	if err := s.upsertRelation(ctx, jobID, params.OwnerID, RelOwnedBy); err != nil {
 		return nil, fmt.Errorf("jobs: relate owner: %w", err)
 	}
 
 	if params.TeamID != "" {
-		if err := c.upsertRelation(ctx, jobID, params.TeamID, RelAssignedTo); err != nil {
+		if err := s.upsertRelation(ctx, jobID, params.TeamID, RelAssignedTo); err != nil {
 			return nil, fmt.Errorf("jobs: relate team: %w", err)
 		}
 	}
 
 	if params.InboxID != "" {
-		if err := c.upsertRelation(ctx, jobID, params.InboxID, RelCreatedFrom); err != nil {
+		if err := s.upsertRelation(ctx, jobID, params.InboxID, RelCreatedFrom); err != nil {
 			return nil, fmt.Errorf("jobs: relate inbox: %w", err)
 		}
 	}
 
 	for _, inputID := range params.InputIDs {
-		if err := c.upsertRelation(ctx, jobID, inputID, RelProcesses); err != nil {
+		if err := s.upsertRelation(ctx, jobID, inputID, RelProcesses); err != nil {
 			return nil, fmt.Errorf("jobs: relate input %s: %w", inputID, err)
 		}
 	}
@@ -275,7 +277,7 @@ func (c *Client) Publish(ctx context.Context, params PublishParams) (*Job, error
 }
 
 // Finalize updates a job's final state (completed/failed/cancelled) and creates output relations.
-func (c *Client) Finalize(ctx context.Context, jobID string, params FinalizeParams) error {
+func (s *Store) Finalize(ctx context.Context, jobID string, params FinalizeParams) error {
 	if err := validateStatus(params.Status); err != nil {
 		return err
 	}
@@ -287,7 +289,7 @@ func (c *Client) Finalize(ctx context.Context, jobID string, params FinalizePara
 	}
 
 	// Guard against re-finalizing a job that is already in a terminal state.
-	current, err := c.Get(ctx, jobID)
+	current, err := s.Get(ctx, jobID)
 	if err != nil {
 		return fmt.Errorf("jobs: check current state: %w", err)
 	}
@@ -306,7 +308,7 @@ func (c *Client) Finalize(ctx context.Context, jobID string, params FinalizePara
 	}
 
 	// Update entity data.
-	_, err = c.entities.BatchWrite(ctx, connect.NewRequest(&entitystorev1.BatchWriteRequest{
+	_, err = s.entities.BatchWrite(ctx, connect.NewRequest(&entitystorev1.BatchWriteRequest{
 		Operations: []*entitystorev1.BatchWriteOp{
 			{Operation: &entitystorev1.BatchWriteOp_WriteEntity{
 				WriteEntity: &entitystorev1.WriteEntityOp{
@@ -332,7 +334,7 @@ func (c *Client) Finalize(ctx context.Context, jobID string, params FinalizePara
 	for _, id := range params.OutputIDs {
 		finalTags = append(finalTags, "output:"+id)
 	}
-	if _, err := c.entities.SetTags(ctx, connect.NewRequest(&entitystorev1.SetTagsRequest{
+	if _, err := s.entities.SetTags(ctx, connect.NewRequest(&entitystorev1.SetTagsRequest{
 		EntityId: jobID,
 		Tags:     finalTags,
 	})); err != nil {
@@ -341,7 +343,7 @@ func (c *Client) Finalize(ctx context.Context, jobID string, params FinalizePara
 
 	// Create output relations.
 	for _, outputID := range params.OutputIDs {
-		if err := c.upsertRelation(ctx, jobID, outputID, RelProduces); err != nil {
+		if err := s.upsertRelation(ctx, jobID, outputID, RelProduces); err != nil {
 			return fmt.Errorf("jobs: relate output %s: %w", outputID, err)
 		}
 	}
@@ -355,7 +357,7 @@ func (c *Client) Finalize(ctx context.Context, jobID string, params FinalizePara
 }
 
 // ReportProgress updates the job's progress field and sets the running tag.
-func (c *Client) ReportProgress(ctx context.Context, jobID string, p Progress) error {
+func (s *Store) ReportProgress(ctx context.Context, jobID string, p Progress) error {
 	pb := &jobsv1.Job{
 		Status: jobsv1.JobStatus_JOB_STATUS_RUNNING,
 		Progress: &jobsv1.Progress{
@@ -371,7 +373,7 @@ func (c *Client) ReportProgress(ctx context.Context, jobID string, p Progress) e
 		return err
 	}
 
-	_, err = c.entities.BatchWrite(ctx, connect.NewRequest(&entitystorev1.BatchWriteRequest{
+	_, err = s.entities.BatchWrite(ctx, connect.NewRequest(&entitystorev1.BatchWriteRequest{
 		Operations: []*entitystorev1.BatchWriteOp{
 			{Operation: &entitystorev1.BatchWriteOp_WriteEntity{
 				WriteEntity: &entitystorev1.WriteEntityOp{
@@ -393,13 +395,13 @@ func (c *Client) ReportProgress(ctx context.Context, jobID string, p Progress) e
 	}
 
 	// Swap pending → running tag on first progress report.
-	if _, err := c.entities.RemoveTag(ctx, connect.NewRequest(&entitystorev1.RemoveTagRequest{
+	if _, err := s.entities.RemoveTag(ctx, connect.NewRequest(&entitystorev1.RemoveTagRequest{
 		EntityId: jobID,
 		Tag:      StatusPending,
 	})); err != nil {
 		return fmt.Errorf("jobs: remove pending tag: %w", err)
 	}
-	if _, err := c.entities.AddTags(ctx, connect.NewRequest(&entitystorev1.AddTagsRequest{
+	if _, err := s.entities.AddTags(ctx, connect.NewRequest(&entitystorev1.AddTagsRequest{
 		EntityId: jobID,
 		Tags:     []string{StatusRunning},
 	})); err != nil {
@@ -410,8 +412,8 @@ func (c *Client) ReportProgress(ctx context.Context, jobID string, p Progress) e
 }
 
 // Get retrieves a job by ID, hydrating relationships from EntityStore.
-func (c *Client) Get(ctx context.Context, jobID string) (*Job, error) {
-	resp, err := c.entities.GetEntity(ctx, connect.NewRequest(&entitystorev1.GetEntityRequest{
+func (s *Store) Get(ctx context.Context, jobID string) (*Job, error) {
+	resp, err := s.entities.GetEntity(ctx, connect.NewRequest(&entitystorev1.GetEntityRequest{
 		Id: jobID,
 	}))
 	if err != nil {
@@ -424,7 +426,7 @@ func (c *Client) Get(ctx context.Context, jobID string) (*Job, error) {
 	}
 
 	// Hydrate relationships.
-	relResp, err := c.entities.GetRelationsFromEntity(ctx, connect.NewRequest(&entitystorev1.GetRelationsFromEntityRequest{
+	relResp, err := s.entities.GetRelationsFromEntity(ctx, connect.NewRequest(&entitystorev1.GetRelationsFromEntityRequest{
 		EntityId: jobID,
 	}))
 	if err != nil {
@@ -452,8 +454,8 @@ func (c *Client) Get(ctx context.Context, jobID string) (*Job, error) {
 
 // GetByWorkflowID retrieves a job by its workflow_id anchor.
 // Returns ErrNotFound if no job exists for the given workflow ID.
-func (c *Client) GetByWorkflowID(ctx context.Context, workflowID string) (*Job, error) {
-	resp, err := c.entities.FindByAnchors(ctx, connect.NewRequest(&entitystorev1.FindByAnchorsRequest{
+func (s *Store) GetByWorkflowID(ctx context.Context, workflowID string) (*Job, error) {
+	resp, err := s.entities.FindByAnchors(ctx, connect.NewRequest(&entitystorev1.FindByAnchorsRequest{
 		EntityType: EntityType,
 		Anchors: []*entitystorev1.AnchorQuery{
 			{Field: "workflow_id", Value: workflowID},
@@ -476,14 +478,14 @@ func (c *Client) GetByWorkflowID(ctx context.Context, workflowID string) (*Job, 
 }
 
 // Cancel marks a job as cancelled.
-func (c *Client) Cancel(ctx context.Context, jobID string) error {
-	return c.Finalize(ctx, jobID, FinalizeParams{
+func (s *Store) Cancel(ctx context.Context, jobID string) error {
+	return s.Finalize(ctx, jobID, FinalizeParams{
 		Status: StatusCancelled,
 	})
 }
 
-func (c *Client) upsertRelation(ctx context.Context, sourceID, targetID, relationType string) error {
-	_, err := c.entities.BatchWrite(ctx, connect.NewRequest(&entitystorev1.BatchWriteRequest{
+func (s *Store) upsertRelation(ctx context.Context, sourceID, targetID, relationType string) error {
+	_, err := s.entities.BatchWrite(ctx, connect.NewRequest(&entitystorev1.BatchWriteRequest{
 		Operations: []*entitystorev1.BatchWriteOp{
 			{Operation: &entitystorev1.BatchWriteOp_UpsertRelation{
 				UpsertRelation: &entitystorev1.UpsertRelationOp{

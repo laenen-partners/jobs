@@ -23,8 +23,6 @@ github.com/jackc/puddle/v2 v2.2.2 h1:PR8nw+E/1w0GLuRFSmiioY6UooMp6KJv0/61nB7icHo
 github.com/jackc/puddle/v2 v2.2.2/go.mod h1:vriiEXHvEE654aYKXXjOvZM39qJ0q+azkZFrfEOc3H4=
 github.com/laenen-partners/entitystore v0.1.2 h1:Hi1nmQbvk6sraOvRHprZ0Uwuc06DM2g0if9yT7wmufk=
 github.com/laenen-partners/entitystore v0.1.2/go.mod h1:wH7tEFBSTbADAwcMa/vJqDK2n3ikhrCAVCwD6UEeDmw=
-github.com/laenen-partners/jobs v0.1.1 h1:adAjmY7V9NSQIXDOKnSS3kd3rcN37CkkT+77X64DLJw=
-github.com/laenen-partners/jobs v0.1.1/go.mod h1:tyTxui73+x5H4xS0fZ+Gdnttyt5iuRRNyQHU1BacJ0k=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/robfig/cron/v3 v3.0.1 h1:WdRxkvbJztn8LMz/QEvLN5sBU+xKpSqwwUO1Pjr4qDs=

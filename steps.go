@@ -54,7 +54,7 @@ type CompleteStepParams struct {
 
 // StartStep creates a new step entity linked to a parent job via a step_of relation.
 // The step is created in running status with a started_at timestamp.
-func (c *Client) StartStep(ctx context.Context, jobID string, params StartStepParams) (*Step, error) {
+func (s *Store) StartStep(ctx context.Context, jobID string, params StartStepParams) (*Step, error) {
 	if params.Name == "" {
 		return nil, fmt.Errorf("jobs: step name is required")
 	}
@@ -75,7 +75,7 @@ func (c *Client) StartStep(ctx context.Context, jobID string, params StartStepPa
 		return nil, err
 	}
 
-	resp, err := c.entities.BatchWrite(ctx, connect.NewRequest(&entitystorev1.BatchWriteRequest{
+	resp, err := s.entities.BatchWrite(ctx, connect.NewRequest(&entitystorev1.BatchWriteRequest{
 		Operations: []*entitystorev1.BatchWriteOp{
 			{Operation: &entitystorev1.BatchWriteOp_WriteEntity{
 				WriteEntity: &entitystorev1.WriteEntityOp{
@@ -100,7 +100,7 @@ func (c *Client) StartStep(ctx context.Context, jobID string, params StartStepPa
 	stepID := stepEntity.Id
 
 	// Link step to parent job.
-	if err := c.upsertRelation(ctx, stepID, jobID, RelStepOf); err != nil {
+	if err := s.upsertRelation(ctx, stepID, jobID, RelStepOf); err != nil {
 		return nil, fmt.Errorf("jobs: relate step to job: %w", err)
 	}
 
@@ -125,7 +125,7 @@ func (c *Client) StartStep(ctx context.Context, jobID string, params StartStepPa
 }
 
 // CompleteStep marks a step as completed with optional output data.
-func (c *Client) CompleteStep(ctx context.Context, stepID string, params CompleteStepParams) error {
+func (s *Store) CompleteStep(ctx context.Context, stepID string, params CompleteStepParams) error {
 	if len(params.Output) > MaxStepOutputSize {
 		return fmt.Errorf("jobs: step output exceeds maximum size of %d bytes", MaxStepOutputSize)
 	}
@@ -141,7 +141,7 @@ func (c *Client) CompleteStep(ctx context.Context, stepID string, params Complet
 		return err
 	}
 
-	_, err = c.entities.BatchWrite(ctx, connect.NewRequest(&entitystorev1.BatchWriteRequest{
+	_, err = s.entities.BatchWrite(ctx, connect.NewRequest(&entitystorev1.BatchWriteRequest{
 		Operations: []*entitystorev1.BatchWriteOp{
 			{Operation: &entitystorev1.BatchWriteOp_WriteEntity{
 				WriteEntity: &entitystorev1.WriteEntityOp{
@@ -162,7 +162,7 @@ func (c *Client) CompleteStep(ctx context.Context, stepID string, params Complet
 		return fmt.Errorf("jobs: update step entity: %w", err)
 	}
 
-	if _, err := c.entities.SetTags(ctx, connect.NewRequest(&entitystorev1.SetTagsRequest{
+	if _, err := s.entities.SetTags(ctx, connect.NewRequest(&entitystorev1.SetTagsRequest{
 		EntityId: stepID,
 		Tags:     []string{StatusCompleted},
 	})); err != nil {
@@ -174,7 +174,7 @@ func (c *Client) CompleteStep(ctx context.Context, stepID string, params Complet
 }
 
 // FailStep marks a step as failed with an error message.
-func (c *Client) FailStep(ctx context.Context, stepID string, stepErr string) error {
+func (s *Store) FailStep(ctx context.Context, stepID string, stepErr string) error {
 	now := timestamppb.Now()
 	pb := &jobsv1.JobStep{
 		Status:      jobsv1.JobStatus_JOB_STATUS_FAILED,
@@ -186,7 +186,7 @@ func (c *Client) FailStep(ctx context.Context, stepID string, stepErr string) er
 		return err
 	}
 
-	_, err = c.entities.BatchWrite(ctx, connect.NewRequest(&entitystorev1.BatchWriteRequest{
+	_, err = s.entities.BatchWrite(ctx, connect.NewRequest(&entitystorev1.BatchWriteRequest{
 		Operations: []*entitystorev1.BatchWriteOp{
 			{Operation: &entitystorev1.BatchWriteOp_WriteEntity{
 				WriteEntity: &entitystorev1.WriteEntityOp{
@@ -207,7 +207,7 @@ func (c *Client) FailStep(ctx context.Context, stepID string, stepErr string) er
 		return fmt.Errorf("jobs: update step entity: %w", err)
 	}
 
-	if _, err := c.entities.SetTags(ctx, connect.NewRequest(&entitystorev1.SetTagsRequest{
+	if _, err := s.entities.SetTags(ctx, connect.NewRequest(&entitystorev1.SetTagsRequest{
 		EntityId: stepID,
 		Tags:     []string{StatusFailed},
 	})); err != nil {
@@ -219,8 +219,8 @@ func (c *Client) FailStep(ctx context.Context, stepID string, stepErr string) er
 }
 
 // GetSteps retrieves all steps linked to a job via step_of relations.
-func (c *Client) GetSteps(ctx context.Context, jobID string) ([]Step, error) {
-	resp, err := c.entities.FindConnectedByType(ctx, connect.NewRequest(&entitystorev1.FindConnectedByTypeRequest{
+func (s *Store) GetSteps(ctx context.Context, jobID string) ([]Step, error) {
+	resp, err := s.entities.FindConnectedByType(ctx, connect.NewRequest(&entitystorev1.FindConnectedByTypeRequest{
 		EntityId:      jobID,
 		EntityType:    StepEntityType,
 		RelationTypes: []string{RelStepOf},

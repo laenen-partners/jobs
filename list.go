@@ -31,7 +31,7 @@ type ListFilter struct {
 // When a relationship filter is set (OwnerID, TeamID, InboxID), List uses
 // FindConnectedByType to traverse the graph. Otherwise it falls back to
 // GetEntitiesByType with tag filtering.
-func (c *Client) List(ctx context.Context, filter ListFilter) ([]Job, error) {
+func (s *Store) List(ctx context.Context, filter ListFilter) ([]Job, error) {
 	if filter.Status != "" {
 		if err := validateStatus(filter.Status); err != nil {
 			return nil, err
@@ -55,13 +55,13 @@ func (c *Client) List(ctx context.Context, filter ListFilter) ([]Job, error) {
 
 	switch {
 	case filter.OwnerID != "":
-		entities, err = c.findConnected(ctx, filter.OwnerID, []string{RelOwnedBy}, queryFilter)
+		entities, err = s.findConnected(ctx, filter.OwnerID, []string{RelOwnedBy}, queryFilter)
 	case filter.TeamID != "":
-		entities, err = c.findConnected(ctx, filter.TeamID, []string{RelAssignedTo}, queryFilter)
+		entities, err = s.findConnected(ctx, filter.TeamID, []string{RelAssignedTo}, queryFilter)
 	case filter.InboxID != "":
-		entities, err = c.findConnected(ctx, filter.InboxID, []string{RelCreatedFrom}, queryFilter)
+		entities, err = s.findConnected(ctx, filter.InboxID, []string{RelCreatedFrom}, queryFilter)
 	default:
-		entities, err = c.findByType(ctx, queryFilter)
+		entities, err = s.findByType(ctx, queryFilter)
 	}
 	if err != nil {
 		return nil, err
@@ -101,8 +101,8 @@ func (c *Client) List(ctx context.Context, filter ListFilter) ([]Job, error) {
 	return jobs, nil
 }
 
-func (c *Client) findConnected(ctx context.Context, entityID string, relationTypes []string, filter *entitystorev1.QueryFilter) ([]*entitystorev1.Entity, error) {
-	resp, err := c.entities.FindConnectedByType(ctx, connect.NewRequest(&entitystorev1.FindConnectedByTypeRequest{
+func (s *Store) findConnected(ctx context.Context, entityID string, relationTypes []string, filter *entitystorev1.QueryFilter) ([]*entitystorev1.Entity, error) {
+	resp, err := s.entities.FindConnectedByType(ctx, connect.NewRequest(&entitystorev1.FindConnectedByTypeRequest{
 		EntityId:      entityID,
 		EntityType:    EntityType,
 		RelationTypes: relationTypes,
@@ -114,8 +114,8 @@ func (c *Client) findConnected(ctx context.Context, entityID string, relationTyp
 	return resp.Msg.Entities, nil
 }
 
-func (c *Client) findByType(ctx context.Context, filter *entitystorev1.QueryFilter) ([]*entitystorev1.Entity, error) {
-	resp, err := c.entities.GetEntitiesByType(ctx, connect.NewRequest(&entitystorev1.GetEntitiesByTypeRequest{
+func (s *Store) findByType(ctx context.Context, filter *entitystorev1.QueryFilter) ([]*entitystorev1.Entity, error) {
+	resp, err := s.entities.GetEntitiesByType(ctx, connect.NewRequest(&entitystorev1.GetEntitiesByTypeRequest{
 		EntityType: EntityType,
 	}))
 	if err != nil {

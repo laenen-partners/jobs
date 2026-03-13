@@ -19,7 +19,7 @@ import (
 // PublishStep creates a job entity as a durable DBOS step.
 // The step is named "publish_job" and is idempotent on recovery — DBOS replays
 // the stored result without re-executing.
-func PublishStep(ctx dbos.DBOSContext, client *jobs.Client, params jobs.PublishParams) (*jobs.Job, error) {
+func PublishStep(ctx dbos.DBOSContext, client *jobs.Store, params jobs.PublishParams) (*jobs.Job, error) {
 	job, err := dbos.RunAsStep(ctx, func(sctx context.Context) (*jobs.Job, error) {
 		return client.Publish(sctx, params)
 	}, dbos.WithStepName("publish_job"))
@@ -32,7 +32,7 @@ func PublishStep(ctx dbos.DBOSContext, client *jobs.Client, params jobs.PublishP
 // FinalizeStep updates a job's final state as a durable DBOS step.
 // The step is named "finalize_job". This should typically be called from
 // a defer block to ensure it runs on both success and failure paths.
-func FinalizeStep(ctx dbos.DBOSContext, client *jobs.Client, jobID string, params jobs.FinalizeParams) error {
+func FinalizeStep(ctx dbos.DBOSContext, client *jobs.Store, jobID string, params jobs.FinalizeParams) error {
 	_, err := dbos.RunAsStep(ctx, func(sctx context.Context) (any, error) {
 		return nil, client.Finalize(sctx, jobID, params)
 	}, dbos.WithStepName("finalize_job"))
@@ -44,7 +44,7 @@ func FinalizeStep(ctx dbos.DBOSContext, client *jobs.Client, jobID string, param
 
 // ProgressStep updates job progress as a durable DBOS step.
 // Named "job_progress_<step>" for traceability in DBOS history.
-func ProgressStep(ctx dbos.DBOSContext, client *jobs.Client, jobID string, p jobs.Progress) error {
+func ProgressStep(ctx dbos.DBOSContext, client *jobs.Store, jobID string, p jobs.Progress) error {
 	_, err := dbos.RunAsStep(ctx, func(sctx context.Context) (any, error) {
 		return nil, client.ReportProgress(sctx, jobID, p)
 	}, dbos.WithStepName("job_progress_"+p.Step))

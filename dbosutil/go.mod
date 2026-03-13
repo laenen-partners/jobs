@@ -5,7 +5,7 @@ go 1.25.6
 require (
 	github.com/dbos-inc/dbos-transact-golang v0.11.0
 	github.com/laenen-partners/entitystore v0.1.2
-	github.com/laenen-partners/jobs v0.1.1
+	github.com/laenen-partners/jobs v0.2.0
 )
 
 require (
