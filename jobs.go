@@ -92,8 +92,8 @@ type Step struct {
 	UpdatedAt   time.Time       `json:"updated_at"`
 }
 
-// PublishParams are the inputs for creating a new job.
-type PublishParams struct {
+// RegisterJobParams are the inputs for creating a new job.
+type RegisterJobParams struct {
 	ExternalReference string          `json:"external_reference"`
 	JobType           string          `json:"job_type"`
 	Tags              []string        `json:"tags,omitempty"`
@@ -109,8 +109,8 @@ type FinalizeParams struct {
 	Tags   []string        `json:"tags,omitempty"`   // additional tags to add on finalize
 }
 
-// StartStepParams are the inputs for creating a new step within a job.
-type StartStepParams struct {
+// RegisterStepParams are the inputs for creating a new step within a job.
+type RegisterStepParams struct {
 	Name     string          `json:"name"`
 	Sequence int             `json:"sequence"`
 	Input    json.RawMessage `json:"input,omitempty"` // max 256 KiB

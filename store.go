@@ -4,19 +4,19 @@ import "context"
 
 // JobStore is the persistence interface for job tracking.
 //
-// Implement this to plug in a custom backend (EntityStore, SQL, in-memory, etc.).
-// The Client delegates all persistence to the JobStore and handles orchestration
-// (Run/Step lifecycle, retries, validation) independently.
+// Implement this to plug in a custom backend (Postgres, in-memory, etc.).
+// The Client delegates all persistence to the JobStore and handles
+// validation and retries independently.
 //
 // See the postgres subpackage for a Postgres implementation.
 type JobStore interface {
 	// Job lifecycle
-	CreateJob(ctx context.Context, params PublishParams) (*Job, error)
+	CreateJob(ctx context.Context, params RegisterJobParams) (*Job, error)
 	FinalizeJob(ctx context.Context, jobID string, params FinalizeParams) error
 	ReportProgress(ctx context.Context, jobID string, p Progress) error
 
 	// Step lifecycle
-	StartStep(ctx context.Context, jobID string, params StartStepParams) (*Step, error)
+	CreateStep(ctx context.Context, jobID string, params RegisterStepParams) (*Step, error)
 	CompleteStep(ctx context.Context, stepID string, params CompleteStepParams) error
 	FailStep(ctx context.Context, stepID string, errMsg string) error
 

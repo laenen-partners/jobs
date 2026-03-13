@@ -1,6 +1,6 @@
 # Jobs SDK
 
-Store-agnostic Go SDK for durable job tracking. Provides a high-level abstraction for creating, tracking, and querying long-running jobs across services with pluggable persistence.
+Store-agnostic Go SDK for durable job tracking. Provides a high-level abstraction for registering, tracking, and querying long-running jobs across services with pluggable persistence.
 
 ## Install
 
@@ -31,12 +31,12 @@ client := jobs.NoopClient()
 
 ## Jobs
 
-A **job** represents a unit of work with a full lifecycle: creation, progress tracking, step execution, and completion or failure.
+A **job** is a tracked record of a unit of work with a full lifecycle: registration, progress tracking, step recording, and finalization.
 
-### Publishing a job
+### Registering a job
 
 ```go
-job, err := client.Publish(ctx, jobs.PublishParams{
+job, err := client.RegisterJob(ctx, jobs.RegisterJobParams{
     ExternalReference: "wf-123",
     JobType:           "file_processing",
     Tags:              []string{"owner:user-456", "input:doc-789", "priority:high"},
@@ -62,10 +62,10 @@ The first progress report transitions the job from `pending` to `running`.
 
 ### Steps
 
-Steps are tracked units of work within a job, each with their own status and timing.
+Steps are tracked records of work within a job, each with their own status and timing.
 
 ```go
-step, err := client.StartStep(ctx, job.ID, jobs.StartStepParams{
+step, err := client.RegisterStep(ctx, job.ID, jobs.RegisterStepParams{
     Name: "convert", Sequence: 0,
 })
 // ... do work ...
@@ -85,7 +85,7 @@ err = client.AddTags(ctx, job.ID, []string{"output:doc-out-1"})
 ### Finalizing
 
 ```go
-err = client.Finalize(ctx, job.ID, jobs.FinalizeParams{
+err = client.FinalizeJob(ctx, job.ID, jobs.FinalizeParams{
     Status: jobs.StatusCompleted,
     Output: outputJSON,
     Tags:   []string{"output:doc-out-1"},  // additional tags added on finalize
@@ -94,18 +94,18 @@ err = client.Finalize(ctx, job.ID, jobs.FinalizeParams{
 
 Terminal states (`completed`, `failed`, `cancelled`) cannot be changed. Returns `ErrAlreadyFinalized` on re-finalize.
 
-### Orchestrated lifecycle (Run/Step)
+### Tracked lifecycle (TrackRun/TrackStep)
 
-`Run` and `Step` handle the full lifecycle automatically with best-effort retries:
+`TrackRun` and `TrackStep` wrap work execution with automatic job/step tracking and best-effort retries:
 
 ```go
-err := client.Run(ctx, jobs.RunParams{
+err := client.TrackRun(ctx, jobs.RunParams{
     ExternalReference: "wf-123",
     JobType:           "file_processing",
     Tags:              []string{"owner:user-123", "input:doc-1"},
 }, func(ctx context.Context, rc *jobs.RunContext) error {
     for i, id := range inputIDs {
-        if err := client.Step(ctx, rc, "process:"+id, func(ctx context.Context) error {
+        if err := client.TrackStep(ctx, rc, "process:"+id, func(ctx context.Context) error {
             return processFile(ctx, id)
         }, jobs.WithSequence(i)); err != nil {
             return err
@@ -120,22 +120,22 @@ err := client.Run(ctx, jobs.RunParams{
 
 ### With DBOS workflows
 
-Use the direct methods (`Publish`, `Finalize`, `StartStep`, etc.) inside DBOS workflows. The job lifecycle is visible and explicit — DBOS handles workflow durability, the Jobs SDK handles job tracking:
+Use the direct methods (`RegisterJob`, `FinalizeJob`, `RegisterStep`, etc.) inside DBOS workflows. The job lifecycle is visible and explicit — DBOS handles workflow durability, the Jobs SDK handles job tracking:
 
 ```go
 func (p *Processor) ProcessFiles(ctx dbos.DBOSContext, input ProcessInput) error {
     workflowID, _ := dbos.GetWorkflowID(ctx)
 
-    // Publish the job as a durable step.
+    // Register the job as a durable step.
     job, err := dbos.RunAsStep(ctx, func(sctx context.Context) (*jobs.Job, error) {
-        return p.jobs.Publish(sctx, jobs.PublishParams{
+        return p.jobs.RegisterJob(sctx, jobs.RegisterJobParams{
             ExternalReference: workflowID,
             JobType:           "file_processing",
             Tags:              []string{"owner:" + input.OwnerID},
         })
-    }, dbos.WithStepName("publish_job"))
+    }, dbos.WithStepName("register_job"))
     if err != nil {
-        return fmt.Errorf("publish job: %w", err)
+        return fmt.Errorf("register job: %w", err)
     }
 
     // Expose the job ID for external polling.
@@ -148,20 +148,20 @@ func (p *Processor) ProcessFiles(ctx dbos.DBOSContext, input ProcessInput) error
     )
     defer func() {
         _, _ = dbos.RunAsStep(ctx, func(sctx context.Context) (any, error) {
-            return nil, p.jobs.Finalize(sctx, job.ID, jobs.FinalizeParams{
+            return nil, p.jobs.FinalizeJob(sctx, job.ID, jobs.FinalizeParams{
                 Status: finalStatus,
                 Error:  finalErr,
             })
         }, dbos.WithStepName("finalize_job"))
     }()
 
-    // Process each input as a tracked step.
+    // Track each input as a registered step.
     for i, inputID := range input.InputIDs {
         step, _ := dbos.RunAsStep(ctx, func(sctx context.Context) (*jobs.Step, error) {
-            return p.jobs.StartStep(sctx, job.ID, jobs.StartStepParams{
+            return p.jobs.RegisterStep(sctx, job.ID, jobs.RegisterStepParams{
                 Name: "process", Sequence: i,
             })
-        }, dbos.WithStepName(fmt.Sprintf("start_step_%d", i)))
+        }, dbos.WithStepName(fmt.Sprintf("register_step_%d", i)))
 
         _, err := dbos.RunAsStep(ctx, func(sctx context.Context) (string, error) {
             return p.processFile(sctx, inputID)
@@ -188,11 +188,11 @@ Every job operation is a visible call — no hidden lifecycle. DBOS `RunAsStep` 
 ### Querying
 
 ```go
-job, err := client.Get(ctx, jobID)
+job, err := client.GetJob(ctx, jobID)
 job, err := client.GetByExternalReference(ctx, "wf-123")
 
 // All completed jobs for a user (AND filter).
-results, err := client.List(ctx, jobs.ListFilter{
+results, err := client.ListJobs(ctx, jobs.ListFilter{
     Tags:  []string{"completed", "owner:user-123"},
     Limit: 25,
 })
@@ -224,7 +224,7 @@ Common patterns:
 ### Status lifecycle
 
 ```
-       Publish
+    RegisterJob
           |
           v
       [pending]
@@ -251,12 +251,12 @@ The `JobStore` interface is the persistence contract. Implement it to plug in an
 ```go
 type JobStore interface {
     // Job lifecycle
-    CreateJob(ctx context.Context, params PublishParams) (*Job, error)
+    CreateJob(ctx context.Context, params RegisterJobParams) (*Job, error)
     FinalizeJob(ctx context.Context, jobID string, params FinalizeParams) error
     ReportProgress(ctx context.Context, jobID string, p Progress) error
 
     // Step lifecycle
-    StartStep(ctx context.Context, jobID string, params StartStepParams) (*Step, error)
+    CreateStep(ctx context.Context, jobID string, params RegisterStepParams) (*Step, error)
     CompleteStep(ctx context.Context, stepID string, params CompleteStepParams) error
     FailStep(ctx context.Context, stepID string, errMsg string) error
 
@@ -271,11 +271,11 @@ type JobStore interface {
 }
 ```
 
-The Client handles validation, retries, and Run/Step orchestration. The JobStore only handles persistence.
+The Client handles validation and retries. The JobStore only handles persistence.
 
 ### Postgres backend
 
-The `postgres/` subpackage provides a ready-to-use implementation backed by Postgres with SQLC-generated queries and goose migrations.
+The `postgres/` subpackage provides a ready-to-use implementation backed by Postgres with SQLC-generated queries and scoped migrations.
 
 ```go
 import (
@@ -299,7 +299,7 @@ Implement `jobs.JobStore` with your own storage:
 ```go
 type myStore struct { db *sql.DB }
 
-func (s *myStore) CreateJob(ctx context.Context, params jobs.PublishParams) (*jobs.Job, error) {
+func (s *myStore) CreateJob(ctx context.Context, params jobs.RegisterJobParams) (*jobs.Job, error) {
     // your implementation
 }
 // ... implement all 11 methods ...
@@ -314,7 +314,7 @@ Exported helpers available for custom implementations: `ValidateStatus`, `Rebuil
 ```
 jobs.go                Pure Go types: Job, Step, Progress, Status, all Params
 store.go               JobStore interface (persistence contract)
-client.go              Client: orchestration, validation, Run/Step lifecycle
+client.go              Client: tracking, validation, TrackRun/TrackStep lifecycle
 errors.go              Sentinel errors
 jobs_test.go           Unit tests with in-memory mock JobStore
 

@@ -8,7 +8,7 @@ See `~/.claude/CLAUDE.md` for org-wide Go service standards.
 
 - **Type:** SDK / Go library (not a standalone service)
 - **Persistence:** Pluggable via `JobStore` interface — bring your own backend
-- **Postgres backend:** `postgres/` subpackage (SQLC + goose migrations)
+- **Postgres backend:** `postgres/` subpackage (SQLC + scoped migrations)
 - **Core package deps:** Zero — pure Go types, no heavy imports
 - **Filtering:** Tag-based (AND). Status, job type, ownership — all expressed as tags.
 
@@ -17,7 +17,7 @@ See `~/.claude/CLAUDE.md` for org-wide Go service standards.
 ```
 jobs.go                Pure Go types: Job, Step, Progress, Status, all Params
 store.go               JobStore interface (11 methods — the persistence contract)
-client.go              Client: orchestration, validation, Run/Step lifecycle
+client.go              Client: tracking, validation, TrackRun/TrackStep lifecycle
 errors.go              Sentinel errors (ErrNotFound, ErrAlreadyFinalized, ErrNoStore)
 jobs_test.go           Unit tests with in-memory mock JobStore
 
@@ -25,7 +25,7 @@ postgres/              Postgres backend (implements jobs.JobStore)
   pgstore.go           NewStore(pool) → jobs.JobStore, SQLC query wrappers
   migrate.go           Scoped migrations with embedded SQL
   sqlc.yaml            SQLC code generation config
-  db/migrations/       SQL migration files (goose format)
+  db/migrations/       SQL migration files
   db/queries/          SQLC query definitions (jobs.sql, steps.sql)
   internal/dbgen/      Generated SQLC code (never edit)
 
@@ -40,7 +40,7 @@ go.mod                 Module dependencies
 FileProcessor / Any Service
         │
         ▼
-    Jobs SDK (this module)       ← Client: Run, Step, Publish, Finalize, Get, List
+    Jobs SDK (this module)       ← Client: RegisterJob, RegisterStep, FinalizeJob, GetJob, ListJobs
         │
         ▼
     JobStore interface           ← Pluggable persistence (11 methods)
@@ -66,7 +66,7 @@ type JobStore interface {
     ReportProgress(ctx, jobID, progress) error
 
     // Step lifecycle
-    StartStep(ctx, jobID, params) (*Step, error)
+    CreateStep(ctx, jobID, params) (*Step, error)
     CompleteStep(ctx, stepID, params) error
     FailStep(ctx, stepID, errMsg) error
 

@@ -23,7 +23,7 @@ func newMockStore() *mockStore {
 	}
 }
 
-func (m *mockStore) CreateJob(_ context.Context, params PublishParams) (*Job, error) {
+func (m *mockStore) CreateJob(_ context.Context, params RegisterJobParams) (*Job, error) {
 	m.nextID++
 	tags := append([]string{string(StatusPending)}, params.Tags...)
 
@@ -73,7 +73,7 @@ func (m *mockStore) ReportProgress(_ context.Context, jobID string, p Progress) 
 	return nil
 }
 
-func (m *mockStore) StartStep(_ context.Context, jobID string, params StartStepParams) (*Step, error) {
+func (m *mockStore) CreateStep(_ context.Context, jobID string, params RegisterStepParams) (*Step, error) {
 	m.nextID++
 	step := &Step{
 		ID:        fmt.Sprintf("step-%d", m.nextID),
@@ -177,17 +177,17 @@ func (m *mockStore) GetSteps(_ context.Context, jobID string) ([]Step, error) {
 
 // --- Tests ---
 
-func TestPublish_Success(t *testing.T) {
+func TestRegisterJob_Success(t *testing.T) {
 	client := NewClient(newMockStore())
 	ctx := context.Background()
 
-	job, err := client.Publish(ctx, PublishParams{
+	job, err := client.RegisterJob(ctx, RegisterJobParams{
 		ExternalReference: "wf-1",
 		JobType:           "file_processing",
 		Tags:              []string{"owner:user-1", "team:team-1", "input:doc-1", "input:doc-2"},
 	})
 	if err != nil {
-		t.Fatalf("Publish: %v", err)
+		t.Fatalf("RegisterJob: %v", err)
 	}
 
 	if job.ID == "" {
@@ -204,10 +204,10 @@ func TestPublish_Success(t *testing.T) {
 	}
 }
 
-func TestPublish_InputTooLarge(t *testing.T) {
+func TestRegisterJob_InputTooLarge(t *testing.T) {
 	client := NewClient(newMockStore())
 	bigInput := json.RawMessage(strings.Repeat("x", MaxInputSize+1))
-	_, err := client.Publish(context.Background(), PublishParams{
+	_, err := client.RegisterJob(context.Background(), RegisterJobParams{
 		Input: bigInput,
 	})
 	if err == nil {
@@ -218,10 +218,10 @@ func TestPublish_InputTooLarge(t *testing.T) {
 	}
 }
 
-func TestPublish_MetadataTooLarge(t *testing.T) {
+func TestRegisterJob_MetadataTooLarge(t *testing.T) {
 	client := NewClient(newMockStore())
 	bigMeta := json.RawMessage(strings.Repeat("x", MaxMetadataSize+1))
-	_, err := client.Publish(context.Background(), PublishParams{
+	_, err := client.RegisterJob(context.Background(), RegisterJobParams{
 		Metadata: bigMeta,
 	})
 	if err == nil {
@@ -232,31 +232,31 @@ func TestPublish_MetadataTooLarge(t *testing.T) {
 	}
 }
 
-func TestFinalize_Success(t *testing.T) {
+func TestFinalizeJob_Success(t *testing.T) {
 	client := NewClient(newMockStore())
 	ctx := context.Background()
 
-	job, err := client.Publish(ctx, PublishParams{
+	job, err := client.RegisterJob(ctx, RegisterJobParams{
 		ExternalReference: "wf-1",
 		JobType:           "test",
 	})
 	if err != nil {
-		t.Fatalf("Publish: %v", err)
+		t.Fatalf("RegisterJob: %v", err)
 	}
 
 	output := json.RawMessage(`{"result":"ok"}`)
-	err = client.Finalize(ctx, job.ID, FinalizeParams{
+	err = client.FinalizeJob(ctx, job.ID, FinalizeParams{
 		Status: StatusCompleted,
 		Output: output,
 		Tags:   []string{"output:out-1"},
 	})
 	if err != nil {
-		t.Fatalf("Finalize: %v", err)
+		t.Fatalf("FinalizeJob: %v", err)
 	}
 
-	got, err := client.Get(ctx, job.ID)
+	got, err := client.GetJob(ctx, job.ID)
 	if err != nil {
-		t.Fatalf("Get after finalize: %v", err)
+		t.Fatalf("GetJob after finalize: %v", err)
 	}
 	if got.Status != StatusCompleted {
 		t.Errorf("status = %q, want %q", got.Status, StatusCompleted)
@@ -266,24 +266,24 @@ func TestFinalize_Success(t *testing.T) {
 	}
 }
 
-func TestFinalize_AlreadyFinalized(t *testing.T) {
+func TestFinalizeJob_AlreadyFinalized(t *testing.T) {
 	client := NewClient(newMockStore())
 	ctx := context.Background()
 
-	job, err := client.Publish(ctx, PublishParams{
+	job, err := client.RegisterJob(ctx, RegisterJobParams{
 		ExternalReference: "wf-1",
 		JobType:           "test",
 	})
 	if err != nil {
-		t.Fatalf("Publish: %v", err)
+		t.Fatalf("RegisterJob: %v", err)
 	}
 
-	err = client.Finalize(ctx, job.ID, FinalizeParams{Status: StatusCompleted})
+	err = client.FinalizeJob(ctx, job.ID, FinalizeParams{Status: StatusCompleted})
 	if err != nil {
-		t.Fatalf("first Finalize: %v", err)
+		t.Fatalf("first FinalizeJob: %v", err)
 	}
 
-	err = client.Finalize(ctx, job.ID, FinalizeParams{Status: StatusFailed})
+	err = client.FinalizeJob(ctx, job.ID, FinalizeParams{Status: StatusFailed})
 	if err == nil {
 		t.Fatal("expected ErrAlreadyFinalized")
 	}
@@ -292,9 +292,9 @@ func TestFinalize_AlreadyFinalized(t *testing.T) {
 	}
 }
 
-func TestFinalize_InvalidStatus(t *testing.T) {
+func TestFinalizeJob_InvalidStatus(t *testing.T) {
 	client := NewClient(newMockStore())
-	err := client.Finalize(context.Background(), "ent-1", FinalizeParams{
+	err := client.FinalizeJob(context.Background(), "ent-1", FinalizeParams{
 		Status: "banana",
 	})
 	if err == nil {
@@ -305,9 +305,9 @@ func TestFinalize_InvalidStatus(t *testing.T) {
 	}
 }
 
-func TestFinalize_NonTerminalStatus(t *testing.T) {
+func TestFinalizeJob_NonTerminalStatus(t *testing.T) {
 	client := NewClient(newMockStore())
-	err := client.Finalize(context.Background(), "ent-1", FinalizeParams{
+	err := client.FinalizeJob(context.Background(), "ent-1", FinalizeParams{
 		Status: StatusRunning,
 	})
 	if err == nil {
@@ -318,10 +318,10 @@ func TestFinalize_NonTerminalStatus(t *testing.T) {
 	}
 }
 
-func TestFinalize_OutputTooLarge(t *testing.T) {
+func TestFinalizeJob_OutputTooLarge(t *testing.T) {
 	client := NewClient(newMockStore())
 	big := json.RawMessage(strings.Repeat("x", MaxOutputSize+1))
-	err := client.Finalize(context.Background(), "ent-1", FinalizeParams{
+	err := client.FinalizeJob(context.Background(), "ent-1", FinalizeParams{
 		Status: StatusCompleted,
 		Output: big,
 	})
@@ -333,22 +333,22 @@ func TestFinalize_OutputTooLarge(t *testing.T) {
 	}
 }
 
-func TestGet_ReturnsTags(t *testing.T) {
+func TestGetJob_ReturnsTags(t *testing.T) {
 	client := NewClient(newMockStore())
 	ctx := context.Background()
 
-	job, err := client.Publish(ctx, PublishParams{
+	job, err := client.RegisterJob(ctx, RegisterJobParams{
 		ExternalReference: "wf-1",
 		JobType:           "test",
 		Tags:              []string{"owner:user-1", "team:team-1", "input:doc-1"},
 	})
 	if err != nil {
-		t.Fatalf("Publish: %v", err)
+		t.Fatalf("RegisterJob: %v", err)
 	}
 
-	got, err := client.Get(ctx, job.ID)
+	got, err := client.GetJob(ctx, job.ID)
 	if err != nil {
-		t.Fatalf("Get: %v", err)
+		t.Fatalf("GetJob: %v", err)
 	}
 
 	if !HasAllTags(got.Tags, []string{"owner:user-1", "team:team-1", "input:doc-1"}) {
@@ -360,12 +360,12 @@ func TestGetByExternalReference_Success(t *testing.T) {
 	client := NewClient(newMockStore())
 	ctx := context.Background()
 
-	published, err := client.Publish(ctx, PublishParams{
+	registered, err := client.RegisterJob(ctx, RegisterJobParams{
 		ExternalReference: "wf-42",
 		JobType:           "test",
 	})
 	if err != nil {
-		t.Fatalf("Publish: %v", err)
+		t.Fatalf("RegisterJob: %v", err)
 	}
 
 	got, err := client.GetByExternalReference(ctx, "wf-42")
@@ -373,8 +373,8 @@ func TestGetByExternalReference_Success(t *testing.T) {
 		t.Fatalf("GetByExternalReference: %v", err)
 	}
 
-	if got.ID != published.ID {
-		t.Errorf("ID = %q, want %q", got.ID, published.ID)
+	if got.ID != registered.ID {
+		t.Errorf("ID = %q, want %q", got.ID, registered.ID)
 	}
 	if got.ExternalReference != "wf-42" {
 		t.Errorf("external_reference = %q, want wf-42", got.ExternalReference)
@@ -392,26 +392,26 @@ func TestGetByExternalReference_NotFound(t *testing.T) {
 	}
 }
 
-func TestCancel(t *testing.T) {
+func TestCancelJob(t *testing.T) {
 	client := NewClient(newMockStore())
 	ctx := context.Background()
 
-	job, err := client.Publish(ctx, PublishParams{
+	job, err := client.RegisterJob(ctx, RegisterJobParams{
 		ExternalReference: "wf-1",
 		JobType:           "test",
 	})
 	if err != nil {
-		t.Fatalf("Publish: %v", err)
+		t.Fatalf("RegisterJob: %v", err)
 	}
 
-	err = client.Cancel(ctx, job.ID)
+	err = client.CancelJob(ctx, job.ID)
 	if err != nil {
-		t.Fatalf("Cancel: %v", err)
+		t.Fatalf("CancelJob: %v", err)
 	}
 
-	got, err := client.Get(ctx, job.ID)
+	got, err := client.GetJob(ctx, job.ID)
 	if err != nil {
-		t.Fatalf("Get after cancel: %v", err)
+		t.Fatalf("GetJob after cancel: %v", err)
 	}
 	if got.Status != StatusCancelled {
 		t.Errorf("status = %q, want %q", got.Status, StatusCancelled)
@@ -422,12 +422,12 @@ func TestReportProgress(t *testing.T) {
 	client := NewClient(newMockStore())
 	ctx := context.Background()
 
-	job, err := client.Publish(ctx, PublishParams{
+	job, err := client.RegisterJob(ctx, RegisterJobParams{
 		ExternalReference: "wf-1",
 		JobType:           "test",
 	})
 	if err != nil {
-		t.Fatalf("Publish: %v", err)
+		t.Fatalf("RegisterJob: %v", err)
 	}
 
 	err = client.ReportProgress(ctx, job.ID, Progress{
@@ -440,9 +440,9 @@ func TestReportProgress(t *testing.T) {
 		t.Fatalf("ReportProgress: %v", err)
 	}
 
-	got, err := client.Get(ctx, job.ID)
+	got, err := client.GetJob(ctx, job.ID)
 	if err != nil {
-		t.Fatalf("Get: %v", err)
+		t.Fatalf("GetJob: %v", err)
 	}
 	if got.Status != StatusRunning {
 		t.Errorf("status = %q, want %q", got.Status, StatusRunning)
@@ -461,61 +461,61 @@ func TestReportProgress(t *testing.T) {
 	}
 }
 
-func TestList_WithTagFilters(t *testing.T) {
+func TestListJobs_WithTagFilters(t *testing.T) {
 	client := NewClient(newMockStore())
 	ctx := context.Background()
 
-	_, err := client.Publish(ctx, PublishParams{
+	_, err := client.RegisterJob(ctx, RegisterJobParams{
 		ExternalReference: "wf-a",
 		JobType:           "type_a",
 		Tags:              []string{"type:type_a"},
 	})
 	if err != nil {
-		t.Fatalf("Publish: %v", err)
+		t.Fatalf("RegisterJob: %v", err)
 	}
-	_, err = client.Publish(ctx, PublishParams{
+	_, err = client.RegisterJob(ctx, RegisterJobParams{
 		ExternalReference: "wf-b",
 		JobType:           "type_b",
 		Tags:              []string{"type:type_b"},
 	})
 	if err != nil {
-		t.Fatalf("Publish: %v", err)
+		t.Fatalf("RegisterJob: %v", err)
 	}
 
-	all, err := client.List(ctx, ListFilter{})
+	all, err := client.ListJobs(ctx, ListFilter{})
 	if err != nil {
-		t.Fatalf("List all: %v", err)
+		t.Fatalf("ListJobs all: %v", err)
 	}
 	if len(all) != 2 {
 		t.Errorf("len = %d, want 2", len(all))
 	}
 
-	filtered, err := client.List(ctx, ListFilter{Tags: []string{"type:type_a"}})
+	filtered, err := client.ListJobs(ctx, ListFilter{Tags: []string{"type:type_a"}})
 	if err != nil {
-		t.Fatalf("List filtered: %v", err)
+		t.Fatalf("ListJobs filtered: %v", err)
 	}
 	if len(filtered) != 1 {
 		t.Errorf("len = %d, want 1", len(filtered))
 	}
 }
 
-func TestList_Pagination(t *testing.T) {
+func TestListJobs_Pagination(t *testing.T) {
 	client := NewClient(newMockStore())
 	ctx := context.Background()
 
 	for i := range 5 {
-		_, err := client.Publish(ctx, PublishParams{
+		_, err := client.RegisterJob(ctx, RegisterJobParams{
 			ExternalReference: fmt.Sprintf("wf-%d", i),
 			JobType:           "test",
 		})
 		if err != nil {
-			t.Fatalf("Publish: %v", err)
+			t.Fatalf("RegisterJob: %v", err)
 		}
 	}
 
-	page, err := client.List(ctx, ListFilter{Limit: 2})
+	page, err := client.ListJobs(ctx, ListFilter{Limit: 2})
 	if err != nil {
-		t.Fatalf("List: %v", err)
+		t.Fatalf("ListJobs: %v", err)
 	}
 	if len(page) != 2 {
 		t.Errorf("len = %d, want 2", len(page))
@@ -561,17 +561,17 @@ func TestValidateStatus(t *testing.T) {
 	}
 }
 
-func TestNoopClient_RunExecutesWork(t *testing.T) {
+func TestNoopClient_TrackRunExecutesWork(t *testing.T) {
 	client := NoopClient()
 	called := false
-	err := client.Run(context.Background(), RunParams{}, func(ctx context.Context, rc *RunContext) error {
+	err := client.TrackRun(context.Background(), RunParams{}, func(ctx context.Context, rc *RunContext) error {
 		called = true
 		// Progress should be safe to call on noop
 		rc.Progress(ctx, Progress{Step: "test", Current: 1, Total: 1})
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("Run: %v", err)
+		t.Fatalf("TrackRun: %v", err)
 	}
 	if !called {
 		t.Error("work function was not called")
@@ -582,13 +582,13 @@ func TestNoopClient_DirectOpsReturnError(t *testing.T) {
 	client := NoopClient()
 	ctx := context.Background()
 
-	if _, err := client.Get(ctx, "id"); err == nil {
-		t.Error("expected ErrNoStore from Get")
+	if _, err := client.GetJob(ctx, "id"); err == nil {
+		t.Error("expected ErrNoStore from GetJob")
 	}
 	if _, err := client.GetByExternalReference(ctx, "wf"); err == nil {
 		t.Error("expected ErrNoStore from GetByExternalReference")
 	}
-	if _, err := client.List(ctx, ListFilter{}); err == nil {
-		t.Error("expected ErrNoStore from List")
+	if _, err := client.ListJobs(ctx, ListFilter{}); err == nil {
+		t.Error("expected ErrNoStore from ListJobs")
 	}
 }

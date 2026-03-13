@@ -24,7 +24,7 @@ func NewStore(pool *pgxpool.Pool) jobs.JobStore {
 	return &Store{q: dbgen.New(pool)}
 }
 
-func (s *Store) CreateJob(ctx context.Context, params jobs.PublishParams) (*jobs.Job, error) {
+func (s *Store) CreateJob(ctx context.Context, params jobs.RegisterJobParams) (*jobs.Job, error) {
 	tags := append([]string{string(jobs.StatusPending)}, params.Tags...)
 
 	row, err := s.q.CreateJob(ctx, dbgen.CreateJobParams{
@@ -109,7 +109,7 @@ func (s *Store) AddTags(ctx context.Context, jobID string, tags []string) error 
 	})
 }
 
-func (s *Store) StartStep(ctx context.Context, jobID string, params jobs.StartStepParams) (*jobs.Step, error) {
+func (s *Store) CreateStep(ctx context.Context, jobID string, params jobs.RegisterStepParams) (*jobs.Step, error) {
 	jid, err := uuid.Parse(jobID)
 	if err != nil {
 		return nil, fmt.Errorf("jobs: invalid job id: %w", err)
