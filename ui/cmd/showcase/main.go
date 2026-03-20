@@ -1,4 +1,5 @@
 // Showcase server for the jobs UI components backed by a real Postgres database.
+// The UI talks to an embedded ConnectRPC server, exercising the full RPC path.
 //
 // Prerequisites: docker compose up -d (from repo root)
 // Run with: go run ./cmd/showcase
@@ -10,6 +11,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 
 	"github.com/a-h/templ"
@@ -18,6 +21,8 @@ import (
 	"github.com/laenen-partners/dsx/showcase"
 	"github.com/laenen-partners/identity"
 	"github.com/laenen-partners/jobs"
+	jobsrpc "github.com/laenen-partners/jobs/connectrpc"
+	"github.com/laenen-partners/jobs/connectrpc/gen/jobs/v1/jobsv1connect"
 	jobspg "github.com/laenen-partners/jobs/postgres"
 	jobsui "github.com/laenen-partners/jobs/ui"
 )
@@ -33,12 +38,12 @@ func main() {
 			{Name: "Viewer", TenantID: "showcase", WorkspaceID: "ws-1", PrincipalID: "viewer-1", Roles: []string{"viewer"}},
 		},
 		Setup: func(ctx context.Context, r chi.Router) error {
-			client, err := setupPostgres(ctx)
+			rpcClient, err := setupRPC(ctx)
 			if err != nil {
 				return err
 			}
 
-			h := jobsui.NewHandlers(client, func(id identity.Context) jobsui.AccessScope {
+			h := jobsui.NewHandlers(rpcClient, func(id identity.Context) jobsui.AccessScope {
 				if id.HasRole("admin") {
 					return jobsui.AccessScope{
 						ListTags:  []string{"tenant:" + id.TenantID()},
@@ -69,6 +74,27 @@ func main() {
 		slog.Error("showcase failed", "error", err)
 		os.Exit(1)
 	}
+}
+
+// setupRPC creates a Postgres-backed jobs.Client, mounts the ConnectRPC
+// handler on an in-process httptest.Server, and returns a ConnectRPC client
+// wrapper that the UI handlers use.
+func setupRPC(ctx context.Context) (*jobsrpc.Client, error) {
+	client, err := setupPostgres(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Mount ConnectRPC handlers on an in-process HTTP server.
+	mux := http.NewServeMux()
+	handler := jobsrpc.NewHandler(client)
+	mux.Handle(jobsv1connect.NewJobQueryServiceHandler(handler))
+	mux.Handle(jobsv1connect.NewJobCommandServiceHandler(handler))
+	ts := httptest.NewServer(mux)
+
+	slog.Info("embedded ConnectRPC server started", "url", ts.URL)
+
+	return jobsrpc.NewClientFromHTTP(ts.Client(), ts.URL), nil
 }
 
 func setupPostgres(ctx context.Context) (*jobs.Client, error) {

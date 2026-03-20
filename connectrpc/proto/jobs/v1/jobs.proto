@@ -1,0 +1,216 @@
+syntax = "proto3";
+
+package jobs.v1;
+
+option go_package = "github.com/laenen-partners/jobs/connectrpc/gen/jobs/v1;jobsv1";
+
+// --- Domain models ---
+
+enum Status {
+  STATUS_UNSPECIFIED = 0;
+  STATUS_PENDING = 1;
+  STATUS_RUNNING = 2;
+  STATUS_COMPLETED = 3;
+  STATUS_FAILED = 4;
+  STATUS_CANCELLED = 5;
+}
+
+message Progress {
+  string step = 1;
+  int32 current = 2;
+  int32 total = 3;
+  string message = 4;
+  string updated_at = 5;
+}
+
+message Step {
+  string id = 1;
+  string job_id = 2;
+  string name = 3;
+  int32 sequence = 4;
+  Status status = 5;
+  string error = 6;
+  string started_at = 7;
+  string completed_at = 8;
+}
+
+message Job {
+  string id = 1;
+  string external_reference = 2;
+  string job_type = 3;
+  Status status = 4;
+  Progress progress = 5;
+  string error = 6;
+  bytes input = 7;
+  bytes output = 8;
+  bytes metadata = 9;
+  repeated string tags = 10;
+  string created_at = 11;
+  string updated_at = 12;
+  repeated Step steps = 13;
+}
+
+// --- Services ---
+
+// JobQueryService provides read-only access to jobs and steps.
+service JobQueryService {
+  // GetJob returns a single job by ID, including its steps.
+  rpc GetJob(GetJobRequest) returns (GetJobResponse);
+
+  // GetJobByExternalReference returns a job by its external reference.
+  rpc GetJobByExternalReference(GetJobByExternalReferenceRequest) returns (GetJobByExternalReferenceResponse);
+
+  // ListJobs returns jobs matching the given tag filters.
+  rpc ListJobs(ListJobsRequest) returns (ListJobsResponse);
+
+  // ListTags returns distinct public tags across matching jobs.
+  rpc ListTags(ListTagsRequest) returns (ListTagsResponse);
+
+  // GetSteps returns all steps for a job.
+  rpc GetSteps(GetStepsRequest) returns (GetStepsResponse);
+}
+
+// JobCommandService provides write operations for job lifecycle management.
+service JobCommandService {
+  // RegisterJob creates a new tracked job.
+  rpc RegisterJob(RegisterJobRequest) returns (RegisterJobResponse);
+
+  // FinalizeJob updates a job to a terminal state.
+  rpc FinalizeJob(FinalizeJobRequest) returns (FinalizeJobResponse);
+
+  // ReportProgress updates a job's progress.
+  rpc ReportProgress(ReportProgressRequest) returns (ReportProgressResponse);
+
+  // CancelJob marks a job as cancelled.
+  rpc CancelJob(CancelJobRequest) returns (CancelJobResponse);
+
+  // AddTags appends tags to a job.
+  rpc AddTags(AddTagsRequest) returns (AddTagsResponse);
+
+  // RegisterStep creates a new step within a job.
+  rpc RegisterStep(RegisterStepRequest) returns (RegisterStepResponse);
+
+  // CompleteStep marks a step as completed.
+  rpc CompleteStep(CompleteStepRequest) returns (CompleteStepResponse);
+
+  // FailStep marks a step as failed.
+  rpc FailStep(FailStepRequest) returns (FailStepResponse);
+}
+
+// --- Query requests/responses ---
+
+message GetJobRequest {
+  string job_id = 1;
+}
+
+message GetJobResponse {
+  Job job = 1;
+}
+
+message GetJobByExternalReferenceRequest {
+  string external_reference = 1;
+}
+
+message GetJobByExternalReferenceResponse {
+  Job job = 1;
+}
+
+message ListJobsRequest {
+  repeated string tags = 1;
+  int32 limit = 2;
+  int32 offset = 3;
+  string sort_by = 4;
+  string sort_dir = 5;
+}
+
+message ListJobsResponse {
+  repeated Job jobs = 1;
+}
+
+message ListTagsRequest {
+  repeated string tags = 1;
+}
+
+message ListTagsResponse {
+  repeated string tags = 1;
+}
+
+message GetStepsRequest {
+  string job_id = 1;
+}
+
+message GetStepsResponse {
+  repeated Step steps = 1;
+}
+
+// --- Command requests/responses ---
+
+message RegisterJobRequest {
+  string external_reference = 1;
+  string job_type = 2;
+  repeated string tags = 3;
+  bytes input = 4;
+  bytes metadata = 5;
+}
+
+message RegisterJobResponse {
+  Job job = 1;
+}
+
+message FinalizeJobRequest {
+  string job_id = 1;
+  Status status = 2;
+  string error = 3;
+  bytes output = 4;
+  repeated string tags = 5;
+}
+
+message FinalizeJobResponse {}
+
+message ReportProgressRequest {
+  string job_id = 1;
+  string step = 2;
+  int32 current = 3;
+  int32 total = 4;
+  string message = 5;
+}
+
+message ReportProgressResponse {}
+
+message CancelJobRequest {
+  string job_id = 1;
+}
+
+message CancelJobResponse {}
+
+message AddTagsRequest {
+  string job_id = 1;
+  repeated string tags = 2;
+}
+
+message AddTagsResponse {}
+
+message RegisterStepRequest {
+  string job_id = 1;
+  string name = 2;
+  int32 sequence = 3;
+  bytes input = 4;
+}
+
+message RegisterStepResponse {
+  Step step = 1;
+}
+
+message CompleteStepRequest {
+  string step_id = 1;
+  bytes output = 2;
+}
+
+message CompleteStepResponse {}
+
+message FailStepRequest {
+  string step_id = 1;
+  string error = 2;
+}
+
+message FailStepResponse {}

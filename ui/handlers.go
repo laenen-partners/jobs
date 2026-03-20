@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -18,15 +19,25 @@ type JobListSignals struct {
 	SortDir string `json:"sortDir"`
 }
 
+// JobService is the interface the UI needs from a jobs backend.
+// Both [jobs.Client] and a ConnectRPC client wrapper satisfy this.
+type JobService interface {
+	ListJobs(ctx context.Context, filter jobs.ListFilter) ([]jobs.Job, error)
+	ListTags(ctx context.Context, filter jobs.ListFilter) ([]string, error)
+	GetJob(ctx context.Context, jobID string) (*jobs.Job, error)
+	GetSteps(ctx context.Context, jobID string) ([]jobs.Step, error)
+	CancelJob(ctx context.Context, jobID string) error
+}
+
 // Handlers provides HTTP handlers for job UI fragments.
 type Handlers struct {
-	client *jobs.Client
+	client JobService
 	policy AccessPolicy
 }
 
-// NewHandlers creates fragment handlers backed by the given jobs Client.
+// NewHandlers creates fragment handlers backed by the given JobService.
 // The policy function controls access scoping per caller.
-func NewHandlers(client *jobs.Client, policy AccessPolicy) *Handlers {
+func NewHandlers(client JobService, policy AccessPolicy) *Handlers {
 	return &Handlers{client: client, policy: policy}
 }
 
