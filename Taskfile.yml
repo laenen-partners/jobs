@@ -2,15 +2,36 @@ version: "3"
 
 tasks:
   generate:
+    desc: Generate all code (SQLC, proto, templ)
+    cmds:
+      - task: generate:sqlc
+      - task: generate:proto
+      - task: generate:templ
+
+  generate:sqlc:
     desc: Generate SQLC code
     dir: postgres
     cmds:
       - sqlc generate
 
+  generate:proto:
+    desc: Generate Connect-RPC code from proto
+    dir: connectrpc
+    cmds:
+      - buf generate
+
+  generate:templ:
+    desc: Generate templ code
+    dir: ui
+    cmds:
+      - templ generate
+
   build:
-    desc: Build the module
+    desc: Build all modules
     cmds:
       - go build ./...
+      - cd connectrpc && go build ./...
+      - cd ui && go build ./...
 
   test:
     desc: Run tests
@@ -23,10 +44,53 @@ tasks:
       - go test -v -count=1 -coverprofile=coverage.out ./...
       - go tool cover -func=coverage.out
 
+  showcase:
+    desc: Run the UI showcase server (requires Docker)
+    cmds:
+      - docker compose up -d postgres
+      - cd ui && templ generate && go run ./cmd/showcase
+
+  lint:
+    desc: Lint proto definitions
+    dir: connectrpc
+    cmds:
+      - buf lint
+
   tidy:
     desc: Tidy all Go modules
     cmds:
       - go mod tidy
+      - cd connectrpc && go mod tidy
+      - cd ui && go mod tidy
+
+  tag:
+    desc: "Tag a module for release (usage: task tag -- v0.2.0)"
+    requires:
+      vars: [CLI_ARGS]
+    preconditions:
+      - sh: git diff --quiet && git diff --cached --quiet
+        msg: "Working tree is dirty — commit or stash changes first"
+      - sh: "test $(git branch --show-current) = main"
+        msg: "Must be on main branch"
+    cmds:
+      - "git tag -a {{.CLI_ARGS}} -m 'Release {{.CLI_ARGS}}'"
+      - "echo 'Tagged {{.CLI_ARGS}} — push with: git push origin {{.CLI_ARGS}}'"
+
+  tag-all:
+    desc: "Tag all modules with the same version (usage: task tag-all -- v0.2.0)"
+    requires:
+      vars: [CLI_ARGS]
+    preconditions:
+      - sh: git diff --quiet && git diff --cached --quiet
+        msg: "Working tree is dirty — commit or stash changes first"
+      - sh: "test $(git branch --show-current) = main"
+        msg: "Must be on main branch"
+    cmds:
+      - "git tag -a {{.CLI_ARGS}} -m 'Release {{.CLI_ARGS}}'"
+      - "git tag -a connectrpc/{{.CLI_ARGS}} -m 'Release connectrpc/{{.CLI_ARGS}}'"
+      - "git tag -a ui/{{.CLI_ARGS}} -m 'Release ui/{{.CLI_ARGS}}'"
+      - "echo 'Tagged {{.CLI_ARGS}}, connectrpc/{{.CLI_ARGS}}, ui/{{.CLI_ARGS}}'"
+      - "echo 'Push with: git push origin {{.CLI_ARGS}} connectrpc/{{.CLI_ARGS}} ui/{{.CLI_ARGS}}'"
 
   clean:
     desc: Remove build artifacts

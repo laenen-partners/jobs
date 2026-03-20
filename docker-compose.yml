@@ -1,0 +1,14 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    ports:
+      - "5488:5432"
+    environment:
+      POSTGRES_DB: jobs_showcase
+      POSTGRES_USER: showcase
+      POSTGRES_PASSWORD: showcase
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:
