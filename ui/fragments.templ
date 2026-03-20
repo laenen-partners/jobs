@@ -132,12 +132,14 @@ templ JobDetailContent(job *jobs.Job, jobSteps []jobs.Step, canCancel bool) {
 				<div class="text-xs text-error bg-error/10 rounded p-2 break-words">{ job.Error }</div>
 			</div>
 		}
-		if len(jobSteps) > 0 {
-			<div class="space-y-2">
-				<h4 class="text-sm font-semibold">Pipeline Steps</h4>
+		<div class="space-y-2">
+			<h4 class="text-sm font-semibold">Pipeline Steps</h4>
+			if len(jobSteps) > 0 {
 				@StepTimeline(jobSteps)
-			</div>
-		}
+			} else {
+				<span class="text-xs text-base-content/40">No steps reported</span>
+			}
+		</div>
 		if canCancel && !jobs.TerminalStatuses[job.Status] {
 			<div class="pt-2">
 				@button.Button(button.Props{

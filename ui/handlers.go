@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/laenen-partners/dsx/ds"
 	"github.com/laenen-partners/identity"
 	"github.com/laenen-partners/jobs"
@@ -29,16 +30,43 @@ type JobService interface {
 	CancelJob(ctx context.Context, jobID string) error
 }
 
+// CancelHandlerFunc is called when a job cancel is requested from the UI.
+// The consuming service implements this to stop in-flight work (e.g. cancel
+// a context, abort a pipeline). It is called before the job status is updated
+// in the store.
+type CancelHandlerFunc func(ctx context.Context, jobID string) error
+
+// HandlerOption configures Handlers.
+type HandlerOption func(*Handlers)
+
+// WithOnCancel registers a handler called when a job is cancelled from the UI.
+// If the handler returns an error the cancel is aborted and a toast is shown.
+func WithOnCancel(fn CancelHandlerFunc) HandlerOption {
+	return func(h *Handlers) { h.onCancel = fn }
+}
+
 // Handlers provides HTTP handlers for job UI fragments.
 type Handlers struct {
-	client JobService
-	policy AccessPolicy
+	client   JobService
+	policy   AccessPolicy
+	onCancel CancelHandlerFunc
 }
 
 // NewHandlers creates fragment handlers backed by the given JobService.
 // The policy function controls access scoping per caller.
-func NewHandlers(client JobService, policy AccessPolicy) *Handlers {
-	return &Handlers{client: client, policy: policy}
+func NewHandlers(client JobService, policy AccessPolicy, opts ...HandlerOption) *Handlers {
+	h := &Handlers{client: client, policy: policy}
+	for _, o := range opts {
+		o(h)
+	}
+	return h
+}
+
+// RegisterRoutes mounts all job UI fragment routes on the given chi router.
+func (h *Handlers) RegisterRoutes(r chi.Router) {
+	r.Get("/fragments/jobs", h.JobList())
+	r.Get("/fragments/jobs/{id}", h.JobDetail())
+	r.Post("/fragments/jobs/{id}/cancel", h.CancelJob())
 }
 
 // JobList returns an HTTP handler that renders the job list table as an SSE patch.
@@ -113,15 +141,27 @@ func (h *Handlers) CancelJob() http.HandlerFunc {
 			return
 		}
 
-		scope := h.scopeFromRequest(r)
-		if !scope.CanCancel {
-			http.Error(w, "forbidden", http.StatusForbidden)
-			return
-		}
-
 		var signals JobListSignals
 		_ = ds.ReadSignals("jobs", r, &signals)
 		sse := datastar.NewSSE(w, r)
+
+		scope := h.scopeFromRequest(r)
+		if !scope.CanCancel {
+			ds.Send.Toast(sse, ds.ToastError, "You do not have permission to cancel jobs")
+			return
+		}
+
+		if h.onCancel == nil {
+			slog.WarnContext(r.Context(), "jobs ui: cancel requested but no handler registered", "job_id", jobID)
+			ds.Send.Toast(sse, ds.ToastError, "Cancel is not supported")
+			return
+		}
+
+		if err := h.onCancel(r.Context(), jobID); err != nil {
+			slog.ErrorContext(r.Context(), "jobs ui: on-cancel handler", "job_id", jobID, "error", err)
+			ds.Send.Toast(sse, ds.ToastError, "Failed to cancel job")
+			return
+		}
 
 		if err := h.client.CancelJob(r.Context(), jobID); err != nil {
 			slog.ErrorContext(r.Context(), "jobs ui: cancel job", "job_id", jobID, "error", err)

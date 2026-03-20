@@ -40,6 +40,8 @@ templ StatusBadge(status jobs.Status) {
 }
 
 // ProgressBar renders a progress indicator for a job.
+// When Total > 0 a determinate bar with "current/total" is shown.
+// When Total is 0 but progress exists, an indeterminate bar is shown.
 templ ProgressBar(p *jobs.Progress) {
 	if p != nil && p.Total > 0 {
 		<div class="flex items-center gap-2">
@@ -53,8 +55,16 @@ templ ProgressBar(p *jobs.Progress) {
 				{ fmt.Sprintf("%d/%d", p.Current, p.Total) }
 			</span>
 		</div>
-	} else if p != nil && p.Message != "" {
-		<span class="text-xs text-base-content/60">{ p.Message }</span>
+	} else if p != nil {
+		<div class="flex items-center gap-2">
+			@progress.Progress(progress.Props{
+				Variant: progress.VariantPrimary,
+				Class:   "w-20",
+			})
+			if p.Message != "" {
+				<span class="text-xs text-base-content/60">{ p.Message }</span>
+			}
+		</div>
 	} else {
 		<span class="text-xs text-base-content/40">—</span>
 	}

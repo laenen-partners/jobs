@@ -46,6 +46,8 @@ tasks:
 
   showcase:
     desc: Run the UI showcase server (requires Docker)
+    deps:
+      - generate:templ
     cmds:
       - docker compose up -d postgres
       - cd ui && templ generate && go run ./cmd/showcase

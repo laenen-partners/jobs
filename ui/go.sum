@@ -73,6 +73,8 @@ github.com/klauspost/compress v1.18.4/go.mod h1:R0h/fSBs8DE4ENlcrlib3PsXS61voFxh
 github.com/klauspost/pgzip v1.2.6/go.mod h1:Ch1tH69qFZu15pkjo5kYi6mth2Zzwzt50oCQKQE9RUs=
 github.com/laenen-partners/dsx v0.4.0 h1:+I/wvSUGUGEdteCzvyLRS/VcxTaQsWX4ThfAPmHcKAk=
 github.com/laenen-partners/dsx v0.4.0/go.mod h1:EOdNgJQbHLhZC6+rZGczcT6/mq/adVUwIg2ch1QWtYc=
+github.com/laenen-partners/dsx v0.5.0 h1:+u35NExxTsAkC5cg116667iD/9v0DRp851TZFrKikXg=
+github.com/laenen-partners/dsx v0.5.0/go.mod h1:EOdNgJQbHLhZC6+rZGczcT6/mq/adVUwIg2ch1QWtYc=
 github.com/laenen-partners/identity v0.1.0 h1:K7qav/S68+qRyqgiId29r9U95k4wEtMVLsArJgmDLWw=
 github.com/laenen-partners/identity v0.1.0/go.mod h1:wtYSUOvpEUKVlkzEkrHG6IKR9t7fgD44aA012NDvuek=
 github.com/laenen-partners/migrate v0.1.0 h1:8XgAPpoMsHZJA7eJiUJm+eWX0Eq5axqCpP/lvnYngSI=

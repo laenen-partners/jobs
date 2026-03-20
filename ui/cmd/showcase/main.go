@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"time"
 
 	"github.com/a-h/templ"
 	"github.com/go-chi/chi/v5"
@@ -59,11 +60,12 @@ func main() {
 				return jobsui.AccessScope{
 					ListTags: []string{"tenant:" + id.TenantID()},
 				}
-			})
+			}, jobsui.WithOnCancel(func(ctx context.Context, jobID string) error {
+				slog.InfoContext(ctx, "showcase: cancel handler called", "job_id", jobID)
+				return nil
+			}))
 
-			r.Get("/fragments/jobs", h.JobList())
-			r.Get("/fragments/jobs/{id}", h.JobDetail())
-			r.Post("/fragments/jobs/{id}/cancel", h.CancelJob())
+			h.RegisterRoutes(r)
 
 			return nil
 		},
@@ -128,8 +130,8 @@ func setupPostgres(ctx context.Context) (*jobs.Client, error) {
 
 func seedData(ctx context.Context, c *jobs.Client) error {
 	if _, err := c.GetByExternalReference(ctx, "showcase-doc-processing-42"); err == nil {
-		slog.Info("data already seeded, skipping")
-		return nil
+		slog.Info("data already seeded, ensuring active jobs exist")
+		return ensureActiveJobs(ctx, c)
 	}
 
 	job1, err := c.RegisterJob(ctx, jobs.RegisterJobParams{
@@ -186,7 +188,7 @@ func seedData(ctx context.Context, c *jobs.Client) error {
 		Error:  "connection timeout: upstream service unavailable after 3 retries",
 	})
 
-	_, err = c.RegisterJob(ctx, jobs.RegisterJobParams{
+	job4, err := c.RegisterJob(ctx, jobs.RegisterJobParams{
 		ExternalReference: "showcase-report-gen-15",
 		JobType:           "report_generation",
 		Tags:              []string{"tenant:showcase", "owner:user-1"},
@@ -195,6 +197,7 @@ func seedData(ctx context.Context, c *jobs.Client) error {
 	if err != nil {
 		return fmt.Errorf("create job4: %w", err)
 	}
+	_ = c.ReportProgress(ctx, job4.ID, jobs.Progress{Message: "Generating report..."})
 
 	job5, err := c.RegisterJob(ctx, jobs.RegisterJobParams{
 		ExternalReference: "showcase-data-export-3",
@@ -217,6 +220,47 @@ func seedData(ctx context.Context, c *jobs.Client) error {
 		return fmt.Errorf("create job6: %w", err)
 	}
 	_ = c.ReportProgress(ctx, job6.ID, jobs.Progress{Current: 450, Total: 1200, Message: "Importing rows..."})
+
+	return nil
+}
+
+// ensureActiveJobs creates fresh running jobs when all previous ones have been
+// cancelled or completed, so the showcase always has something to cancel.
+func ensureActiveJobs(ctx context.Context, c *jobs.Client) error {
+	active, err := c.ListJobs(ctx, jobs.ListFilter{Tags: []string{"tenant:showcase", "running"}})
+	if err != nil {
+		return fmt.Errorf("list active jobs: %w", err)
+	}
+	if len(active) > 0 {
+		slog.Info("active jobs exist, nothing to create", "count", len(active))
+		return nil
+	}
+
+	slog.Info("no active jobs found, creating fresh ones")
+
+	job, err := c.RegisterJob(ctx, jobs.RegisterJobParams{
+		ExternalReference: fmt.Sprintf("showcase-live-sync-%d", time.Now().Unix()),
+		JobType:           "data_sync",
+		Tags:              []string{"tenant:showcase", "owner:user-1"},
+		Input:             mustJSON(map[string]any{"source": "api", "target": "warehouse"}),
+	})
+	if err != nil {
+		return fmt.Errorf("create active job: %w", err)
+	}
+	_ = c.ReportProgress(ctx, job.ID, jobs.Progress{Step: "sync", Current: 42, Total: 200, Message: "Syncing records..."})
+	s1, _ := c.RegisterStep(ctx, job.ID, jobs.RegisterStepParams{Name: "fetch", Sequence: 1})
+	_ = c.CompleteStep(ctx, s1.ID, jobs.CompleteStepParams{})
+	_, _ = c.RegisterStep(ctx, job.ID, jobs.RegisterStepParams{Name: "sync", Sequence: 2})
+
+	job2, err := c.RegisterJob(ctx, jobs.RegisterJobParams{
+		ExternalReference: fmt.Sprintf("showcase-bg-process-%d", time.Now().Unix()),
+		JobType:           "background_task",
+		Tags:              []string{"tenant:showcase", "owner:admin-1"},
+	})
+	if err != nil {
+		return fmt.Errorf("create active job 2: %w", err)
+	}
+	_ = c.ReportProgress(ctx, job2.ID, jobs.Progress{Message: "Working..."})
 
 	return nil
 }
