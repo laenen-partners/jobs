@@ -121,12 +121,51 @@ type CompleteStepParams struct {
 	Output json.RawMessage `json:"output,omitempty"` // max 256 KiB
 }
 
+// SortField identifies a column that jobs can be sorted by.
+type SortField string
+
+const (
+	SortByCreatedAt SortField = "created_at"
+	SortByUpdatedAt SortField = "updated_at"
+	SortByJobType   SortField = "job_type"
+	SortByStatus    SortField = "status"
+)
+
+// allowedSortFields is the allowlist of columns that can be used for sorting.
+var allowedSortFields = map[SortField]bool{
+	SortByCreatedAt: true,
+	SortByUpdatedAt: true,
+	SortByJobType:   true,
+	SortByStatus:    true,
+}
+
+// SortDirection controls ascending vs descending sort order.
+type SortDirection string
+
+const (
+	SortAsc  SortDirection = "asc"
+	SortDesc SortDirection = "desc"
+)
+
 // ListFilter controls which jobs are returned by List.
 // All tags are AND-combined — a job must have every tag to match.
 type ListFilter struct {
-	Tags   []string // all must match
-	Limit  int      // max results (0 = DefaultListLimit)
-	Offset int      // skip first N results
+	Tags    []string      // all must match
+	Limit   int           // max results (0 = DefaultListLimit)
+	Offset  int           // skip first N results
+	SortBy  SortField     // column to sort by (default: created_at)
+	SortDir SortDirection // sort direction (default: desc)
+}
+
+// ValidateSort checks that a sort field and direction are valid.
+func ValidateSort(field SortField, dir SortDirection) error {
+	if field != "" && !allowedSortFields[field] {
+		return fmt.Errorf("jobs: invalid sort field %q: must be one of created_at, updated_at, job_type, status", field)
+	}
+	if dir != "" && dir != SortAsc && dir != SortDesc {
+		return fmt.Errorf("jobs: invalid sort direction %q: must be asc or desc", dir)
+	}
+	return nil
 }
 
 // ValidateStatus checks that a status value is a known lifecycle state.

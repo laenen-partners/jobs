@@ -1,0 +1,154 @@
+package ui
+
+import (
+	"fmt"
+
+	"github.com/laenen-partners/dsx/ds"
+	"github.com/laenen-partners/dsx/ui/badge"
+	"github.com/laenen-partners/dsx/ui/button"
+	"github.com/laenen-partners/dsx/ui/selectinput"
+	"github.com/laenen-partners/dsx/ui/table"
+	"github.com/laenen-partners/jobs"
+)
+
+// JobListTable renders the filter bar and job list table.
+templ JobListTable(jobList []jobs.Job, canCancel bool, signals JobListSignals, availTags []string) {
+	<div id="jobs-list" { ds.RawSignals(signalsJSON(signals))... }>
+		<div class="flex flex-wrap items-center gap-2 mb-3">
+			@selectinput.Select(selectinput.Props{
+				Size: selectinput.SizeSm,
+				Attributes: ds.Merge(
+					ds.Bind("jobs", "status"),
+					ds.On("change", ds.Get("/fragments/jobs")),
+				),
+			}) {
+				<option value="" selected?={ signals.Status == "" }>All Statuses</option>
+				<option value="pending" selected?={ signals.Status == "pending" }>Pending</option>
+				<option value="running" selected?={ signals.Status == "running" }>Running</option>
+				<option value="completed" selected?={ signals.Status == "completed" }>Completed</option>
+				<option value="failed" selected?={ signals.Status == "failed" }>Failed</option>
+				<option value="cancelled" selected?={ signals.Status == "cancelled" }>Cancelled</option>
+			}
+			if len(availTags) > 0 {
+				for _, tag := range availTags {
+					@badge.Badge(badge.Props{Style: badge.StyleOutline, Size: badge.SizeSm}) {
+						{ tag }
+					}
+				}
+			}
+		</div>
+		if len(jobList) == 0 {
+			<div class="text-base-content/60 text-sm p-4">No jobs found.</div>
+		} else {
+			<div class="overflow-x-auto">
+				@table.Table(table.Props{Size: table.SizeSm}) {
+					<thead>
+						<tr>
+							@sortHeader("Type", "job_type", signals.SortBy, signals.SortDir)
+							@sortHeader("Status", "status", signals.SortBy, signals.SortDir)
+							<th>Progress</th>
+							@sortHeader("Created", "created_at", signals.SortBy, signals.SortDir)
+							@sortHeader("Updated", "updated_at", signals.SortBy, signals.SortDir)
+						</tr>
+					</thead>
+					<tbody>
+						for _, job := range jobList {
+							<tr class="hover cursor-pointer" { ds.OnClick(ds.GetOnce(fmt.Sprintf("/fragments/jobs/%s", job.ID)))... }>
+								<td class="font-mono text-xs">{ job.JobType }</td>
+								<td>
+									@StatusBadge(job.Status)
+								</td>
+								<td>
+									if job.Error != "" && job.Progress == nil {
+										<span class="text-xs text-error">{ job.Error }</span>
+									} else {
+										@ProgressBar(job.Progress)
+									}
+								</td>
+								<td class="text-xs text-base-content/60">{ job.CreatedAt.Format("2006-01-02 15:04") }</td>
+								<td class="text-xs text-base-content/60">{ job.UpdatedAt.Format("2006-01-02 15:04") }</td>
+							</tr>
+						}
+					</tbody>
+				}
+			</div>
+		}
+	</div>
+}
+
+// sortHeader renders a clickable table header that toggles sorting.
+templ sortHeader(label string, column string, currentSort string, currentDir string) {
+	<th
+		class="cursor-pointer select-none"
+		{ ds.On("click", sortExpr(column) + "; " + ds.Get("/fragments/jobs"))... }
+	>
+		<span class="inline-flex items-center gap-1">
+			{ label }
+			if currentSort == column || (currentSort == "" && column == "created_at") {
+				if currentDir == "asc" {
+					<span class="text-xs opacity-60">&#9650;</span>
+				} else {
+					<span class="text-xs opacity-60">&#9660;</span>
+				}
+			}
+		</span>
+	</th>
+}
+
+// JobDetailContent renders the detail panel for a single job (used inside drawer).
+templ JobDetailContent(job *jobs.Job, jobSteps []jobs.Step, canCancel bool) {
+	<h3 class="text-lg font-bold">Job Details</h3>
+	<div class="space-y-4 mt-3">
+		<div class="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+			<span class="text-base-content/60">ID</span>
+			<span class="font-mono text-xs">{ job.ID }</span>
+			<span class="text-base-content/60">Type</span>
+			<span class="font-mono text-xs">{ job.JobType }</span>
+			<span class="text-base-content/60">Status</span>
+			<span>
+				@StatusBadge(job.Status)
+			</span>
+			if job.ExternalReference != "" {
+				<span class="text-base-content/60">Reference</span>
+				<span class="font-mono text-xs">{ job.ExternalReference }</span>
+			}
+			<span class="text-base-content/60">Created</span>
+			<span class="text-xs">{ job.CreatedAt.Format("2006-01-02 15:04:05") }</span>
+			<span class="text-base-content/60">Updated</span>
+			<span class="text-xs">{ job.UpdatedAt.Format("2006-01-02 15:04:05") }</span>
+		</div>
+		if job.Progress != nil && (job.Progress.Total > 0 || job.Progress.Message != "") {
+			<div class="space-y-1">
+				<h4 class="text-sm font-semibold">Progress</h4>
+				@ProgressBar(job.Progress)
+				if job.Progress.Step != "" {
+					<div class="text-xs text-base-content/60">Step: { job.Progress.Step }</div>
+				}
+			</div>
+		}
+		if job.Error != "" {
+			<div class="space-y-1">
+				<h4 class="text-sm font-semibold text-error">Error</h4>
+				<div class="text-xs text-error bg-error/10 rounded p-2 break-words">{ job.Error }</div>
+			</div>
+		}
+		if len(jobSteps) > 0 {
+			<div class="space-y-2">
+				<h4 class="text-sm font-semibold">Pipeline Steps</h4>
+				@StepTimeline(jobSteps)
+			</div>
+		}
+		if canCancel && !jobs.TerminalStatuses[job.Status] {
+			<div class="pt-2">
+				@button.Button(button.Props{
+					Variant: button.VariantError,
+					Size:    button.SizeSm,
+				}) {
+					<span { ds.OnClick(ds.Post(fmt.Sprintf("/fragments/jobs/%s/cancel", job.ID)))... }>
+						Cancel Job
+					</span>
+				}
+			</div>
+		}
+	</div>
+}

@@ -1,0 +1,11 @@
+package main
+
+import "github.com/laenen-partners/dsx/showcase"
+
+templ showcasePage() {
+	@showcase.Page("Jobs UI Showcase") {
+		@showcase.Section("Job List", "Shows status badges, progress bars, and clickable rows. Click a row to open the detail drawer.") {
+			@showcase.Fragment("jobs-list", "/fragments/jobs")
+		}
+	}
+}

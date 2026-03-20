@@ -1,0 +1,100 @@
+package ui
+
+import (
+	"fmt"
+
+	"github.com/laenen-partners/dsx/ui/badge"
+	"github.com/laenen-partners/dsx/ui/progress"
+	"github.com/laenen-partners/dsx/ui/steps"
+	"github.com/laenen-partners/jobs"
+)
+
+// StatusBadge renders a badge with variant mapped to job status.
+templ StatusBadge(status jobs.Status) {
+	switch status {
+		case jobs.StatusPending:
+			@badge.Badge(badge.Props{Style: badge.StyleGhost, Size: badge.SizeSm}) {
+				Pending
+			}
+		case jobs.StatusRunning:
+			@badge.Badge(badge.Props{Variant: badge.VariantInfo, Style: badge.StyleSoft, Size: badge.SizeSm}) {
+				Running
+			}
+		case jobs.StatusCompleted:
+			@badge.Badge(badge.Props{Variant: badge.VariantSuccess, Style: badge.StyleSoft, Size: badge.SizeSm}) {
+				Completed
+			}
+		case jobs.StatusFailed:
+			@badge.Badge(badge.Props{Variant: badge.VariantError, Style: badge.StyleSoft, Size: badge.SizeSm}) {
+				Failed
+			}
+		case jobs.StatusCancelled:
+			@badge.Badge(badge.Props{Variant: badge.VariantWarning, Style: badge.StyleSoft, Size: badge.SizeSm}) {
+				Cancelled
+			}
+		default:
+			@badge.Badge(badge.Props{Size: badge.SizeSm}) {
+				Unknown
+			}
+	}
+}
+
+// ProgressBar renders a progress indicator for a job.
+templ ProgressBar(p *jobs.Progress) {
+	if p != nil && p.Total > 0 {
+		<div class="flex items-center gap-2">
+			@progress.Progress(progress.Props{
+				Variant: progress.VariantPrimary,
+				Value:   p.Current,
+				Max:     p.Total,
+				Class:   "w-20",
+			})
+			<span class="text-xs text-base-content/60">
+				{ fmt.Sprintf("%d/%d", p.Current, p.Total) }
+			</span>
+		</div>
+	} else if p != nil && p.Message != "" {
+		<span class="text-xs text-base-content/60">{ p.Message }</span>
+	} else {
+		<span class="text-xs text-base-content/40">—</span>
+	}
+}
+
+// StepTimeline renders a vertical step visualization for a job's steps.
+templ StepTimeline(jobSteps []jobs.Step) {
+	if len(jobSteps) > 0 {
+		@steps.Steps(steps.Props{Direction: steps.DirectionVertical, Class: "w-full"}) {
+			for _, step := range jobSteps {
+				@steps.Step(steps.StepProps{Variant: stepVariant(step.Status)}) {
+					<div class="flex flex-col gap-0.5 py-1">
+						<div class="flex items-center gap-2">
+							<span class="text-sm font-medium">{ step.Name }</span>
+							@StatusBadge(step.Status)
+						</div>
+						if !step.StartedAt.IsZero() {
+							<span class="text-xs text-base-content/40">{ step.StartedAt.Format("15:04:05") }</span>
+						}
+						if step.Error != "" {
+							<div class="text-xs text-error bg-error/10 rounded p-1.5 mt-1 break-words">{ step.Error }</div>
+						}
+					</div>
+				}
+			}
+		}
+	}
+}
+
+func stepVariant(status jobs.Status) steps.Variant {
+	switch status {
+	case jobs.StatusCompleted:
+		return steps.VariantSuccess
+	case jobs.StatusRunning:
+		return steps.VariantInfo
+	case jobs.StatusFailed:
+		return steps.VariantError
+	case jobs.StatusCancelled:
+		return steps.VariantWarning
+	default:
+		return steps.VariantDefault
+	}
+}

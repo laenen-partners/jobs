@@ -27,5 +27,6 @@ type JobStore interface {
 	GetJob(ctx context.Context, jobID string) (*Job, error)
 	GetJobByExternalReference(ctx context.Context, externalReference string) (*Job, error)
 	ListJobs(ctx context.Context, filter ListFilter) ([]Job, error)
+	ListTags(ctx context.Context, filter ListFilter) ([]string, error)
 	GetSteps(ctx context.Context, jobID string) ([]Step, error)
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -148,20 +149,63 @@ func (m *mockStore) ListJobs(_ context.Context, filter ListFilter) ([]Job, error
 	}
 
 	var result []Job
-	skipped := 0
 	for _, job := range m.jobs {
 		if len(filter.Tags) > 0 && !HasAllTags(job.Tags, filter.Tags) {
 			continue
 		}
-		if skipped < filter.Offset {
-			skipped++
+		result = append(result, *job)
+	}
+
+	// Apply sorting.
+	sortBy := filter.SortBy
+	if sortBy == "" {
+		sortBy = SortByCreatedAt
+	}
+	sort.Slice(result, func(i, j int) bool {
+		var less bool
+		switch sortBy {
+		case SortByCreatedAt:
+			less = result[i].CreatedAt.Before(result[j].CreatedAt)
+		case SortByUpdatedAt:
+			less = result[i].UpdatedAt.Before(result[j].UpdatedAt)
+		case SortByJobType:
+			less = result[i].JobType < result[j].JobType
+		case SortByStatus:
+			less = string(result[i].Status) < string(result[j].Status)
+		}
+		if filter.SortDir == SortAsc {
+			return less
+		}
+		return !less
+	})
+
+	// Apply pagination.
+	if filter.Offset > 0 && filter.Offset < len(result) {
+		result = result[filter.Offset:]
+	} else if filter.Offset >= len(result) {
+		return nil, nil
+	}
+	if len(result) > limit {
+		result = result[:limit]
+	}
+	return result, nil
+}
+
+func (m *mockStore) ListTags(_ context.Context, filter ListFilter) ([]string, error) {
+	seen := make(map[string]bool)
+	for _, job := range m.jobs {
+		if len(filter.Tags) > 0 && !HasAllTags(job.Tags, filter.Tags) {
 			continue
 		}
-		result = append(result, *job)
-		if len(result) >= limit {
-			break
+		for _, t := range job.Tags {
+			seen[t] = true
 		}
 	}
+	var result []string
+	for t := range seen {
+		result = append(result, t)
+	}
+	sort.Strings(result)
 	return result, nil
 }
 
@@ -590,5 +634,87 @@ func TestNoopClient_DirectOpsReturnError(t *testing.T) {
 	}
 	if _, err := client.ListJobs(ctx, ListFilter{}); err == nil {
 		t.Error("expected ErrNoStore from ListJobs")
+	}
+	if _, err := client.ListTags(ctx, ListFilter{}); err == nil {
+		t.Error("expected ErrNoStore from ListTags")
+	}
+}
+
+func TestValidateSort(t *testing.T) {
+	if err := ValidateSort(SortByCreatedAt, SortDesc); err != nil {
+		t.Errorf("ValidateSort(created_at, desc) = %v, want nil", err)
+	}
+	if err := ValidateSort(SortByJobType, SortAsc); err != nil {
+		t.Errorf("ValidateSort(job_type, asc) = %v, want nil", err)
+	}
+	if err := ValidateSort("", ""); err != nil {
+		t.Errorf("ValidateSort('', '') = %v, want nil", err)
+	}
+	if err := ValidateSort("banana", SortAsc); err == nil {
+		t.Error("expected error for invalid sort field")
+	}
+	if err := ValidateSort(SortByCreatedAt, "sideways"); err == nil {
+		t.Error("expected error for invalid sort direction")
+	}
+}
+
+func TestListJobs_Sorting(t *testing.T) {
+	store := newMockStore()
+	client := NewClient(store)
+	ctx := context.Background()
+
+	now := time.Now()
+	for i, jt := range []string{"b_type", "a_type", "c_type"} {
+		store.nextID++
+		store.jobs[fmt.Sprintf("job-%d", store.nextID)] = &Job{
+			ID:        fmt.Sprintf("job-%d", store.nextID),
+			JobType:   jt,
+			Status:    StatusPending,
+			Tags:      []string{string(StatusPending)},
+			CreatedAt: now.Add(time.Duration(i) * time.Second),
+			UpdatedAt: now.Add(time.Duration(i) * time.Second),
+		}
+	}
+
+	result, err := client.ListJobs(ctx, ListFilter{SortBy: SortByJobType, SortDir: SortAsc})
+	if err != nil {
+		t.Fatalf("ListJobs: %v", err)
+	}
+	if len(result) != 3 {
+		t.Fatalf("len = %d, want 3", len(result))
+	}
+	if result[0].JobType != "a_type" || result[1].JobType != "b_type" || result[2].JobType != "c_type" {
+		t.Errorf("sort order = %s, %s, %s — want a_type, b_type, c_type",
+			result[0].JobType, result[1].JobType, result[2].JobType)
+	}
+}
+
+func TestListTags(t *testing.T) {
+	client := NewClient(newMockStore())
+	ctx := context.Background()
+
+	_, err := client.RegisterJob(ctx, RegisterJobParams{
+		ExternalReference: "wf-a",
+		JobType:           "test",
+		Tags:              []string{"owner:user-1", "team:alpha"},
+	})
+	if err != nil {
+		t.Fatalf("RegisterJob: %v", err)
+	}
+	_, err = client.RegisterJob(ctx, RegisterJobParams{
+		ExternalReference: "wf-b",
+		JobType:           "test",
+		Tags:              []string{"owner:user-2", "team:alpha"},
+	})
+	if err != nil {
+		t.Fatalf("RegisterJob: %v", err)
+	}
+
+	allTags, err := client.ListTags(ctx, ListFilter{})
+	if err != nil {
+		t.Fatalf("ListTags: %v", err)
+	}
+	if len(allTags) < 3 {
+		t.Errorf("expected at least 3 distinct tags, got %d: %v", len(allTags), allTags)
 	}
 }

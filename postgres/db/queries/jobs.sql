@@ -26,12 +26,6 @@ SET status = 'running',
     updated_at = now()
 WHERE id = @id;
 
--- name: ListJobs :many
-SELECT * FROM jobs
-WHERE (sqlc.narg('tags')::text[] IS NULL OR tags @> sqlc.narg('tags')::text[])
-ORDER BY created_at DESC
-LIMIT sqlc.arg('result_limit') OFFSET sqlc.arg('result_offset');
-
 -- name: AddJobTags :exec
 UPDATE jobs
 SET tags = (SELECT ARRAY(SELECT DISTINCT unnest(tags || @new_tags::text[]))),

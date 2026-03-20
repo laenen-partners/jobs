@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/laenen-partners/tags"
 
 	"github.com/laenen-partners/jobs"
 	"github.com/laenen-partners/jobs/postgres/internal/dbgen"
@@ -16,12 +17,13 @@ import (
 
 // Store implements jobs.JobStore backed by Postgres via SQLC-generated queries.
 type Store struct {
-	q *dbgen.Queries
+	pool *pgxpool.Pool
+	q    *dbgen.Queries
 }
 
 // NewStore creates a jobs.JobStore backed by Postgres.
 func NewStore(pool *pgxpool.Pool) jobs.JobStore {
-	return &Store{q: dbgen.New(pool)}
+	return &Store{pool: pool, q: dbgen.New(pool)}
 }
 
 func (s *Store) CreateJob(ctx context.Context, params jobs.RegisterJobParams) (*jobs.Job, error) {
@@ -174,31 +176,103 @@ func (s *Store) GetJobByExternalReference(ctx context.Context, externalReference
 	return rowToJob(row), nil
 }
 
+// sortColumns is the allowlist of columns for ORDER BY (prevents SQL injection).
+var sortColumns = map[jobs.SortField]string{
+	jobs.SortByCreatedAt: "created_at",
+	jobs.SortByUpdatedAt: "updated_at",
+	jobs.SortByJobType:   "job_type",
+	jobs.SortByStatus:    "status",
+}
+
 func (s *Store) ListJobs(ctx context.Context, filter jobs.ListFilter) ([]jobs.Job, error) {
 	limit := filter.Limit
 	if limit <= 0 {
 		limit = jobs.DefaultListLimit
 	}
 
-	var tags []string
-	if len(filter.Tags) > 0 {
-		tags = filter.Tags
+	col := "created_at"
+	if filter.SortBy != "" {
+		c, ok := sortColumns[filter.SortBy]
+		if !ok {
+			return nil, fmt.Errorf("jobs: invalid sort field %q", filter.SortBy)
+		}
+		col = c
+	}
+	dir := "DESC"
+	if filter.SortDir == jobs.SortAsc {
+		dir = "ASC"
 	}
 
-	rows, err := s.q.ListJobs(ctx, dbgen.ListJobsParams{
-		Tags:         tags,
-		ResultLimit:  int32(limit),
-		ResultOffset: int32(filter.Offset),
-	})
+	query := fmt.Sprintf(`SELECT id, external_reference, job_type, status,
+		progress_step, progress_current, progress_total, progress_message, progress_updated_at,
+		error, input, output, metadata, tags, created_at, updated_at
+		FROM jobs
+		WHERE ($1::text[] IS NULL OR tags @> $1::text[])
+		ORDER BY %s %s
+		LIMIT $2 OFFSET $3`, col, dir)
+
+	var filterTags []string
+	if len(filter.Tags) > 0 {
+		filterTags = filter.Tags
+	}
+
+	rows, err := s.pool.Query(ctx, query, filterTags, limit, filter.Offset)
 	if err != nil {
 		return nil, fmt.Errorf("jobs: list: %w", err)
 	}
+	defer rows.Close()
 
-	result := make([]jobs.Job, len(rows))
-	for i, row := range rows {
-		result[i] = *rowToJob(row)
+	var result []jobs.Job
+	for rows.Next() {
+		var row dbgen.Job
+		if err := rows.Scan(
+			&row.ID, &row.ExternalReference, &row.JobType, &row.Status,
+			&row.ProgressStep, &row.ProgressCurrent, &row.ProgressTotal,
+			&row.ProgressMessage, &row.ProgressUpdatedAt,
+			&row.Error, &row.Input, &row.Output, &row.Metadata,
+			&row.Tags, &row.CreatedAt, &row.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("jobs: list scan: %w", err)
+		}
+		result = append(result, *rowToJob(row))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("jobs: list: %w", err)
 	}
 	return result, nil
+}
+
+func (s *Store) ListTags(ctx context.Context, filter jobs.ListFilter) ([]string, error) {
+	query := `SELECT DISTINCT unnest(tags) AS tag FROM jobs
+		WHERE ($1::text[] IS NULL OR tags @> $1::text[])
+		ORDER BY tag`
+
+	var filterTags []string
+	if len(filter.Tags) > 0 {
+		filterTags = filter.Tags
+	}
+
+	rows, err := s.pool.Query(ctx, query, filterTags)
+	if err != nil {
+		return nil, fmt.Errorf("jobs: list tags: %w", err)
+	}
+	defer rows.Close()
+
+	var allTags []string
+	for rows.Next() {
+		var tag string
+		if err := rows.Scan(&tag); err != nil {
+			return nil, fmt.Errorf("jobs: list tags scan: %w", err)
+		}
+		allTags = append(allTags, tag)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("jobs: list tags: %w", err)
+	}
+
+	// Filter to public tags only (exclude internal _prefixed and bare strings).
+	parsed := tags.FromStrings(allTags)
+	return parsed.Public().Strings(), nil
 }
 
 func (s *Store) GetSteps(ctx context.Context, jobID string) ([]jobs.Step, error) {

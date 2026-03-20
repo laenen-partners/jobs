@@ -242,6 +242,14 @@ func (c *Client) FailStep(ctx context.Context, stepID string, stepErr string) er
 	return c.store.FailStep(ctx, stepID, stepErr)
 }
 
+// ListTags returns distinct tags across jobs matching the filter.
+func (c *Client) ListTags(ctx context.Context, filter ListFilter) ([]string, error) {
+	if c.store == nil {
+		return nil, ErrNoStore
+	}
+	return c.store.ListTags(ctx, filter)
+}
+
 // GetSteps retrieves all steps linked to a job.
 func (c *Client) GetSteps(ctx context.Context, jobID string) ([]Step, error) {
 	if c.store == nil {
