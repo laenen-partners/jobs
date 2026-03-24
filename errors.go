@@ -13,4 +13,8 @@ var (
 	// ErrNoStore is returned when a direct operation is called on a Client
 	// with no backing store (e.g. NoopClient).
 	ErrNoStore = errors.New("jobs: no store configured")
+
+	// ErrAccessDenied is returned when an entity exists but is not visible
+	// in the current scope.
+	ErrAccessDenied = errors.New("jobs: access denied")
 )

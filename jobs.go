@@ -16,6 +16,11 @@ import (
 	"time"
 )
 
+// Entity is the pubsub entity name used in change notifications.
+// Use this when subscribing to job changes via stream scopes
+// (e.g. "jobs:*" or "jobs:<id>").
+const Entity = "jobs"
+
 // Size limits for data fields.
 const (
 	MaxInputSize      = 1 << 20  // 1 MiB

@@ -15,15 +15,14 @@ import (
     "github.com/jackc/pgx/v5/pgxpool"
     "github.com/laenen-partners/jobs"
     jobspg "github.com/laenen-partners/jobs/postgres"
+    "github.com/laenen-partners/pubsub"
 )
 
 pool, _ := pgxpool.New(ctx, connString)
-
-// Run migrations (optional — uses "jobs" scope by default).
 jobspg.Migrate(ctx, pool, "")
 
-// Create client with Postgres backend.
-client := jobs.NewClient(jobspg.NewStore(pool))
+// Create client with Postgres backend and change notifications.
+client := jobs.NewClient(jobspg.NewStore(pool), jobs.WithPubSub(ps))
 
 // Or without tracking.
 client := jobs.NoopClient()
@@ -96,7 +95,7 @@ Terminal states (`completed`, `failed`, `cancelled`) cannot be changed. Returns 
 
 ### Tracked lifecycle (TrackRun/TrackStep)
 
-`TrackRun` and `TrackStep` wrap work execution with automatic job/step tracking and best-effort retries:
+`TrackRun` and `TrackStep` wrap work execution with automatic job/step tracking:
 
 ```go
 err := client.TrackRun(ctx, jobs.RunParams{
@@ -116,6 +115,11 @@ err := client.TrackRun(ctx, jobs.RunParams{
     }
     return nil
 })
+```
+
+**Best-effort tracking.** `TrackRun` and `TrackStep` treat tracking as secondary to the actual work. If the store is unreachable, the work function still executes — tracking calls are retried (default: 3 attempts, 500ms apart) and failures are logged but never propagated to the caller. This means job or step state can become stale if the store is down during a mutation (e.g. a job completes but finalization fails, leaving it stuck in `running`).
+
+Use the direct methods (`RegisterJob`, `FinalizeJob`, `RegisterStep`, etc.) when tracking accuracy is critical — they return errors immediately and give full control over error handling.
 ```
 
 ### With DBOS workflows
@@ -244,6 +248,18 @@ Common patterns:
 | `ErrAlreadyFinalized` | Job already in terminal state |
 | `ErrNoStore` | Client has no backing store (NoopClient) |
 
+## Change notifications
+
+When configured with `WithPubSub`, the Client publishes change notifications after every job mutation via the [pubsub](https://github.com/laenen-partners/pubsub) library. Scope (tenant/workspace) is derived from the `identity.Context` on the request context.
+
+```go
+client := jobs.NewClient(store, jobs.WithPubSub(ps))
+```
+
+Each mutation publishes a `ChangeNotification` with entity `"job"` and the job ID. `RegisterJob` publishes with action `"created"`, all other mutations with `"updated"`. Topics are scoped: `<tenant>.<workspace>.change.job.<jobID>.<action>`.
+
+If no `identity.Context` is present on the context (e.g. background jobs without auth), the notification is skipped with a warning log.
+
 ## JobStore
 
 The `JobStore` interface is the persistence contract. Implement it to plug in any backend.
@@ -289,7 +305,7 @@ pool, _ := pgxpool.New(ctx, connString)
 jobspg.Migrate(ctx, pool, "")
 
 store := jobspg.NewStore(pool)
-client := jobs.NewClient(store)
+client := jobs.NewClient(store, jobs.WithPubSub(ps))
 ```
 
 ### Custom backend
@@ -304,7 +320,7 @@ func (s *myStore) CreateJob(ctx context.Context, params jobs.RegisterJobParams) 
 }
 // ... implement all 11 methods ...
 
-client := jobs.NewClient(&myStore{db: db})
+client := jobs.NewClient(&myStore{db: db}, jobs.WithPubSub(ps))
 ```
 
 Exported helpers available for custom implementations: `ValidateStatus`, `RebuildTags`, `HasAllTags`, `ValidateData`.

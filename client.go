@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
+
+	"github.com/laenen-partners/identity"
+	"github.com/laenen-partners/pubsub"
 )
 
 // Client provides job tracking with lifecycle management.
@@ -21,6 +24,7 @@ type Client struct {
 	maxRetries int
 	retryDelay time.Duration
 	logger     *slog.Logger
+	ps         pubsub.PubSub
 }
 
 // ClientOption configures a Client.
@@ -42,6 +46,13 @@ func WithRetryDelay(d time.Duration) ClientOption {
 // Default: slog.Default().
 func WithLogger(l *slog.Logger) ClientOption {
 	return func(c *Client) { c.logger = l }
+}
+
+// WithPubSub configures a pubsub transport for publishing change
+// notifications after every job mutation. Scope is derived from the
+// identity.Context on each request context.
+func WithPubSub(ps pubsub.PubSub) ClientOption {
+	return func(c *Client) { c.ps = ps }
 }
 
 // NewClient creates a Client backed by a JobStore with retries and best-effort logging.
@@ -137,6 +148,41 @@ func applyStepOptions(opts []StepOption) StepConfig {
 	return cfg
 }
 
+func (c *Client) notifyChange(ctx context.Context, jobID, action string) {
+	if c.ps == nil {
+		return
+	}
+	id, ok := identity.FromContext(ctx)
+	if !ok {
+		c.logger.WarnContext(ctx, "JOBS: skipping change notification — no identity in context",
+			"job_id", jobID,
+			"action", action,
+		)
+		return
+	}
+	bus := pubsub.NewBus(c.ps, "jobs", pubsub.WithScopeFrom(id))
+	var err error
+	switch action {
+	case pubsub.ActionCreated:
+		err = bus.NotifyCreated(ctx, Entity, jobID)
+	default:
+		err = bus.NotifyUpdated(ctx, Entity, jobID)
+	}
+	if err != nil {
+		c.logger.ErrorContext(ctx, "JOBS: failed to publish change notification",
+			"job_id", jobID,
+			"action", action,
+			"error", err,
+		)
+	} else {
+		c.logger.DebugContext(ctx, "JOBS: published change notification",
+			"job_id", jobID,
+			"action", action,
+			"topic", bus.ChangeTopic(Entity, jobID, action),
+		)
+	}
+}
+
 // --- Direct tracking operations (delegate to Store) ---
 
 // RegisterJob creates a new tracked job.
@@ -150,7 +196,12 @@ func (c *Client) RegisterJob(ctx context.Context, params RegisterJobParams) (*Jo
 	if err := ValidateData(params.Metadata, MaxMetadataSize, "metadata"); err != nil {
 		return nil, err
 	}
-	return c.store.CreateJob(ctx, params)
+	job, err := c.store.CreateJob(ctx, params)
+	if err != nil {
+		return nil, err
+	}
+	c.notifyChange(ctx, job.ID, "created")
+	return job, nil
 }
 
 // FinalizeJob updates a job's final state (completed/failed/cancelled).
@@ -167,7 +218,11 @@ func (c *Client) FinalizeJob(ctx context.Context, jobID string, params FinalizeP
 	if err := ValidateData(params.Output, MaxOutputSize, "output"); err != nil {
 		return err
 	}
-	return c.store.FinalizeJob(ctx, jobID, params)
+	if err := c.store.FinalizeJob(ctx, jobID, params); err != nil {
+		return err
+	}
+	c.notifyChange(ctx, jobID, "updated")
+	return nil
 }
 
 // ReportProgress updates the job's progress field.
@@ -175,7 +230,11 @@ func (c *Client) ReportProgress(ctx context.Context, jobID string, p Progress) e
 	if c.store == nil {
 		return ErrNoStore
 	}
-	return c.store.ReportProgress(ctx, jobID, p)
+	if err := c.store.ReportProgress(ctx, jobID, p); err != nil {
+		return err
+	}
+	c.notifyChange(ctx, jobID, "updated")
+	return nil
 }
 
 // CancelJob marks a job as cancelled.
@@ -220,7 +279,12 @@ func (c *Client) RegisterStep(ctx context.Context, jobID string, params Register
 	if err := ValidateData(params.Input, MaxStepInputSize, "step input"); err != nil {
 		return nil, err
 	}
-	return c.store.CreateStep(ctx, jobID, params)
+	step, err := c.store.CreateStep(ctx, jobID, params)
+	if err != nil {
+		return nil, err
+	}
+	c.notifyChange(ctx, jobID, "updated")
+	return step, nil
 }
 
 // CompleteStep marks a step as completed with optional output data.
@@ -263,7 +327,11 @@ func (c *Client) AddTags(ctx context.Context, jobID string, tags []string) error
 	if c.store == nil {
 		return ErrNoStore
 	}
-	return c.store.AddTags(ctx, jobID, tags)
+	if err := c.store.AddTags(ctx, jobID, tags); err != nil {
+		return err
+	}
+	c.notifyChange(ctx, jobID, "updated")
+	return nil
 }
 
 // --- Orchestrated tracking ---
@@ -382,6 +450,8 @@ func (c *Client) TrackStep(ctx context.Context, rc *RunContext, name string, fn 
 				return c.CompleteStep(rctx, stepID, CompleteStepParams{})
 			})
 		}
+		// Notify after step mutation — TrackStep has access to the parent jobID.
+		c.notifyChange(ctx, rc.JobID, "updated")
 	}
 
 	return workErr

@@ -5,7 +5,9 @@ go 1.26
 require (
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.8.0
+	github.com/laenen-partners/identity v0.1.0
 	github.com/laenen-partners/migrate v0.1.0
+	github.com/laenen-partners/pubsub v0.3.1
 	github.com/laenen-partners/tags v0.1.0
 )
 

@@ -132,7 +132,7 @@ import (
 
 pool, _ := pgxpool.New(ctx, connString)
 jobspg.Migrate(ctx, pool, "") // uses default "jobs" scope
-client := jobs.NewClient(jobspg.NewStore(pool))
+client := jobs.NewClient(jobspg.NewStore(pool), jobs.WithPubSub(ps))
 ```
 
 ### Without tracking (noop)

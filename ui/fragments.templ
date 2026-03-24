@@ -4,16 +4,18 @@ import (
 	"fmt"
 
 	"github.com/laenen-partners/dsx/ds"
+	"github.com/laenen-partners/dsx/stream"
 	"github.com/laenen-partners/dsx/ui/badge"
 	"github.com/laenen-partners/dsx/ui/button"
 	"github.com/laenen-partners/dsx/ui/selectinput"
 	"github.com/laenen-partners/dsx/ui/table"
+	"github.com/laenen-partners/dsx/ui/tooltip"
 	"github.com/laenen-partners/jobs"
 )
 
 // JobListTable renders the filter bar and job list table.
 templ JobListTable(jobList []jobs.Job, canCancel bool, signals JobListSignals, availTags []string) {
-	<div id="jobs-list" { ds.RawSignals(signalsJSON(signals))... }>
+	<div id="jobs-list" { ds.RawSignals(signalsJSON(signals))... } { stream.Attrs(ctx, jobs.Entity+":*", "/fragments/jobs")... }>
 		<div class="flex flex-wrap items-center gap-2 mb-3">
 			@selectinput.Select(selectinput.Props{
 				Size: selectinput.SizeSm,
@@ -98,7 +100,7 @@ templ sortHeader(label string, column string, currentSort string, currentDir str
 // JobDetailContent renders the detail panel for a single job (used inside drawer).
 templ JobDetailContent(job *jobs.Job, jobSteps []jobs.Step, canCancel bool) {
 	<h3 class="text-lg font-bold">Job Details</h3>
-	<div class="space-y-4 mt-3">
+	<div class="space-y-4 mt-3" data-effect={ fmt.Sprintf("if($_stream.%s) @get('/fragments/jobs/%s')", stream.ScopeKey(jobs.Entity+":*"), job.ID) }>
 		<div class="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
 			<span class="text-base-content/60">ID</span>
 			<span class="font-mono text-xs">{ job.ID }</span>
@@ -117,7 +119,7 @@ templ JobDetailContent(job *jobs.Job, jobSteps []jobs.Step, canCancel bool) {
 			<span class="text-base-content/60">Updated</span>
 			<span class="text-xs">{ job.UpdatedAt.Format("2006-01-02 15:04:05") }</span>
 		</div>
-		if job.Progress != nil && (job.Progress.Total > 0 || job.Progress.Message != "") {
+		if !jobs.TerminalStatuses[job.Status] && job.Progress != nil && (job.Progress.Total > 0 || job.Progress.Message != "") {
 			<div class="space-y-1">
 				<h4 class="text-sm font-semibold">Progress</h4>
 				@ProgressBar(job.Progress)
@@ -133,7 +135,14 @@ templ JobDetailContent(job *jobs.Job, jobSteps []jobs.Step, canCancel bool) {
 			</div>
 		}
 		<div class="space-y-2">
-			<h4 class="text-sm font-semibold">Pipeline Steps</h4>
+			<div class="flex items-center gap-1.5">
+				<h4 class="text-sm font-semibold">Pipeline Steps</h4>
+				@tooltip.Tooltip(tooltip.Props{Tip: "Step status is tracked on a best-effort basis and may not always reflect the actual outcome.", Position: tooltip.PositionBottom}) {
+					<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" width="14" height="14" class="opacity-40 hover:opacity-70 cursor-help transition-opacity">
+						<path stroke-linecap="round" stroke-linejoin="round" d="m11.25 11.25.041-.02a.75.75 0 0 1 1.063.852l-.708 2.836a.75.75 0 0 0 1.063.853l.041-.021M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9-3.75h.008v.008H12V8.25Z"></path>
+					</svg>
+				}
+			</div>
 			if len(jobSteps) > 0 {
 				@StepTimeline(jobSteps)
 			} else {
