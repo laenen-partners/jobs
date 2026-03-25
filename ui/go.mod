@@ -13,8 +13,8 @@ require (
 	github.com/jackc/pgx/v5 v5.8.0
 	github.com/laenen-partners/dsx v0.7.0
 	github.com/laenen-partners/identity v0.1.0
-	github.com/laenen-partners/jobs v0.1.1
-	github.com/laenen-partners/jobs/connectrpc v0.0.0-00010101000000-000000000000
+	github.com/laenen-partners/jobs v0.6.0
+	github.com/laenen-partners/jobs/connectrpc v0.6.0
 	github.com/laenen-partners/pubsub v0.3.1
 	github.com/starfederation/datastar-go v1.1.0
 )

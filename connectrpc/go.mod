@@ -4,7 +4,7 @@ go 1.26
 
 require (
 	connectrpc.com/connect v1.19.1
-	github.com/laenen-partners/jobs v0.1.1
+	github.com/laenen-partners/jobs v0.6.0
 	google.golang.org/protobuf v1.36.11
 )
 
