@@ -94,14 +94,14 @@ func (h *Handlers) JobList() http.HandlerFunc {
 		result, err := h.client.ListJobs(r.Context(), filter)
 		if err != nil {
 			slog.ErrorContext(r.Context(), "jobs ui: list jobs", "error", err)
-			ds.Send.Toast(sse, ds.ToastError, "Failed to load jobs")
+			_ = ds.Send.Toast(sse, ds.ToastError, "Failed to load jobs")
 			return
 		}
 
 		tagFilter := jobs.ListFilter{Tags: scope.ListTags}
 		availTags, _ := h.client.ListTags(r.Context(), tagFilter)
 
-		ds.Send.Patch(sse, JobListTable(result, scope.CanCancel, signals, availTags))
+		_ = ds.Send.Patch(sse, JobListTable(result, scope.CanCancel, signals, availTags))
 	}
 }
 
@@ -126,7 +126,7 @@ func (h *Handlers) JobDetail() http.HandlerFunc {
 		scope := h.scopeFromRequest(r)
 
 		sse := datastar.NewSSE(w, r)
-		ds.Send.Drawer(sse, JobDetailContent(job, steps, scope.CanCancel), ds.WithDrawerMaxWidth("max-w-xl"))
+		_ = ds.Send.Drawer(sse, JobDetailContent(job, steps, scope.CanCancel), ds.WithDrawerMaxWidth("max-w-xl"))
 	}
 }
 
@@ -147,25 +147,25 @@ func (h *Handlers) CancelJob() http.HandlerFunc {
 
 		scope := h.scopeFromRequest(r)
 		if !scope.CanCancel {
-			ds.Send.Toast(sse, ds.ToastError, "You do not have permission to cancel jobs")
+			_ = ds.Send.Toast(sse, ds.ToastError, "You do not have permission to cancel jobs")
 			return
 		}
 
 		if h.onCancel == nil {
 			slog.WarnContext(r.Context(), "jobs ui: cancel requested but no handler registered", "job_id", jobID)
-			ds.Send.Toast(sse, ds.ToastError, "Cancel is not supported")
+			_ = ds.Send.Toast(sse, ds.ToastError, "Cancel is not supported")
 			return
 		}
 
 		if err := h.onCancel(r.Context(), jobID); err != nil {
 			slog.ErrorContext(r.Context(), "jobs ui: on-cancel handler", "job_id", jobID, "error", err)
-			ds.Send.Toast(sse, ds.ToastError, "Failed to cancel job")
+			_ = ds.Send.Toast(sse, ds.ToastError, "Failed to cancel job")
 			return
 		}
 
 		if err := h.client.CancelJob(r.Context(), jobID); err != nil {
 			slog.ErrorContext(r.Context(), "jobs ui: cancel job", "job_id", jobID, "error", err)
-			ds.Send.Toast(sse, ds.ToastError, "Failed to cancel job")
+			_ = ds.Send.Toast(sse, ds.ToastError, "Failed to cancel job")
 			return
 		}
 
@@ -177,7 +177,7 @@ func (h *Handlers) CancelJob() http.HandlerFunc {
 		steps, _ := h.client.GetSteps(r.Context(), jobID)
 
 		// Re-render drawer with updated job.
-		ds.Send.Drawer(sse, JobDetailContent(job, steps, scope.CanCancel), ds.WithDrawerMaxWidth("max-w-xl"))
+		_ = ds.Send.Drawer(sse, JobDetailContent(job, steps, scope.CanCancel), ds.WithDrawerMaxWidth("max-w-xl"))
 
 		// Re-patch job list with current filters.
 		filter := jobs.ListFilter{Tags: append([]string{}, scope.ListTags...)}
@@ -192,9 +192,9 @@ func (h *Handlers) CancelJob() http.HandlerFunc {
 		}
 		result, _ := h.client.ListJobs(r.Context(), filter)
 		availTags, _ := h.client.ListTags(r.Context(), jobs.ListFilter{Tags: scope.ListTags})
-		ds.Send.Patch(sse, JobListTable(result, scope.CanCancel, signals, availTags))
+		_ = ds.Send.Patch(sse, JobListTable(result, scope.CanCancel, signals, availTags))
 
-		ds.Send.Toast(sse, ds.ToastSuccess, "Job cancelled")
+		_ = ds.Send.Toast(sse, ds.ToastSuccess, "Job cancelled")
 	}
 }
 

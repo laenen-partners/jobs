@@ -1,100 +1,101 @@
 version: "3"
 
+vars:
+  GO_MODULES: ". connectrpc ui"
+
 tasks:
-  generate:
-    desc: Generate all code (SQLC, proto, templ)
+  setup:
+    desc: Download and verify Go module dependencies
     cmds:
-      - task: generate:sqlc
+      - for: { var: GO_MODULES }
+        cmd: cd {{.ITEM}} && go mod download && go mod verify
+
+  build:
+    desc: Build all Go modules
+    cmds:
+      - for: { var: GO_MODULES }
+        cmd: cd {{.ITEM}} && go build ./...
+
+  generate:
+    desc: Run all code generation
+    cmds:
       - task: generate:proto
       - task: generate:templ
 
-  generate:sqlc:
-    desc: Generate SQLC code
-    dir: postgres
+  generate:templ:
+    desc: Run templ generate
+    dir: ui
     cmds:
-      - sqlc generate
+      - go tool templ generate
 
   generate:proto:
-    desc: Generate Connect-RPC code from proto
+    desc: Run proto generate
     dir: connectrpc
     cmds:
       - buf generate
 
-  generate:templ:
-    desc: Generate templ code
-    dir: ui
+  format:
+    desc: Format all
     cmds:
-      - templ generate
+      - task: format:go
+      - task: format:templ
+      - task: format:proto
 
-  build:
-    desc: Build all modules
+  format:go:
+    desc: Format Go code
     cmds:
-      - go build ./...
-      - cd connectrpc && go build ./...
-      - cd ui && go build ./...
+      - for: { var: GO_MODULES }
+        cmd: cd {{.ITEM}} && gofumpt -l -w .
 
-  test:
-    desc: Run tests
-    cmds:
-      - go test -v -count=1 ./...
-
-  test:cover:
-    desc: Run tests with coverage
-    cmds:
-      - go test -v -count=1 -coverprofile=coverage.out ./...
-      - go tool cover -func=coverage.out
-
-  showcase:
-    desc: Run the UI showcase server (requires Docker)
-    deps:
-      - generate:templ
-    cmds:
-      - docker compose up -d postgres
-      - cd ui && templ generate && go run ./cmd/showcase
-
-  lint:
-    desc: Lint proto definitions
+  format:proto:
+    desc: Format proto files
     dir: connectrpc
     cmds:
-      - buf lint
+      - buf format -w .
 
-  tidy:
-    desc: Tidy all Go modules
+  format:templ:
+    desc: Format templ files
+    dir: ui
     cmds:
-      - go mod tidy
-      - cd connectrpc && go mod tidy
-      - cd ui && go mod tidy
+      - go tool templ fmt .
 
-  tag:
-    desc: "Tag a module for release (usage: task tag -- v0.2.0)"
-    requires:
-      vars: [CLI_ARGS]
-    preconditions:
-      - sh: git diff --quiet && git diff --cached --quiet
-        msg: "Working tree is dirty — commit or stash changes first"
-      - sh: "test $(git branch --show-current) = main"
-        msg: "Must be on main branch"
+  lint:
+    desc: Run linters
     cmds:
-      - "git tag -a {{.CLI_ARGS}} -m 'Release {{.CLI_ARGS}}'"
-      - "echo 'Tagged {{.CLI_ARGS}} — push with: git push origin {{.CLI_ARGS}}'"
+      - task: lint:go
+      - task: lint:proto
 
-  tag-all:
-    desc: "Tag all modules with the same version (usage: task tag-all -- v0.2.0)"
-    requires:
-      vars: [CLI_ARGS]
-    preconditions:
-      - sh: git diff --quiet && git diff --cached --quiet
-        msg: "Working tree is dirty — commit or stash changes first"
-      - sh: "test $(git branch --show-current) = main"
-        msg: "Must be on main branch"
+  lint:go:
+    desc: Run golangci-lint
     cmds:
-      - "git tag -a {{.CLI_ARGS}} -m 'Release {{.CLI_ARGS}}'"
-      - "git tag -a connectrpc/{{.CLI_ARGS}} -m 'Release connectrpc/{{.CLI_ARGS}}'"
-      - "git tag -a ui/{{.CLI_ARGS}} -m 'Release ui/{{.CLI_ARGS}}'"
-      - "echo 'Tagged {{.CLI_ARGS}}, connectrpc/{{.CLI_ARGS}}, ui/{{.CLI_ARGS}}'"
-      - "echo 'Push with: git push origin {{.CLI_ARGS}} connectrpc/{{.CLI_ARGS}} ui/{{.CLI_ARGS}}'"
+      - for: { var: GO_MODULES }
+        cmd: cd {{.ITEM}} && golangci-lint run ./...
 
-  clean:
-    desc: Remove build artifacts
+  lint:proto:
+    desc: Run proto linter
+    dir: connectrpc
     cmds:
-      - rm -rf bin/ coverage.out
+      - buf lint .
+
+  test:ci:
+    desc: Run tests and output JUnit XML to reports/
+    cmds:
+      - mkdir -p reports
+      - for: { var: GO_MODULES }
+        cmd: cd {{.ITEM}} && gotestsum --junitfile ${PWD}/reports/junit-{{.ITEM}}.xml -- ./...
+
+  vuln:ci:
+    desc: Run osv-scanner vulnerability scan
+    cmds:
+      - osv-scanner scan -r .
+
+  ci:
+    desc: Run the full CI pipeline
+    cmds:
+      - task setup
+      - task generate
+      - task format
+      - task lint
+      - task build
+      - task test:ci
+      - task vuln:ci

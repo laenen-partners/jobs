@@ -55,8 +55,6 @@ github.com/laenen-partners/identity v0.1.0 h1:K7qav/S68+qRyqgiId29r9U95k4wEtMVLs
 github.com/laenen-partners/identity v0.1.0/go.mod h1:wtYSUOvpEUKVlkzEkrHG6IKR9t7fgD44aA012NDvuek=
 github.com/laenen-partners/migrate v0.1.0 h1:8XgAPpoMsHZJA7eJiUJm+eWX0Eq5axqCpP/lvnYngSI=
 github.com/laenen-partners/migrate v0.1.0/go.mod h1:5pBjbs2uJ2jPqwkzjSH38LtHHJ1Pn3eS2egq0S9JwKI=
-github.com/laenen-partners/pubsub v0.3.0 h1:WkEOmrnyQexzztgabx7yZpDQGGOVtOAwwvuBBJtm4uQ=
-github.com/laenen-partners/pubsub v0.3.0/go.mod h1:aan/Ln5x/C3/B3zgJSb09dji6IAWb8UocijL9l5P9x8=
 github.com/laenen-partners/pubsub v0.3.1 h1:znlDX4oegqwbsHZE+72fFaXHgAu77W1sX1RJqC9YjkM=
 github.com/laenen-partners/pubsub v0.3.1/go.mod h1:aan/Ln5x/C3/B3zgJSb09dji6IAWb8UocijL9l5P9x8=
 github.com/laenen-partners/tags v0.1.0 h1:fjyeLV1uNLY4p2jU1l4ETiKTSkGH/zo5uT04L3R+ujc=
