@@ -23,9 +23,9 @@ const Entity = "jobs"
 
 // Size limits for data fields.
 const (
-	MaxInputSize      = 1 << 20  // 1 MiB
-	MaxOutputSize     = 1 << 20  // 1 MiB
-	MaxMetadataSize   = 64 << 10 // 64 KiB
+	MaxInputSize      = 1 << 20   // 1 MiB
+	MaxOutputSize     = 1 << 20   // 1 MiB
+	MaxMetadataSize   = 64 << 10  // 64 KiB
 	MaxStepInputSize  = 256 << 10 // 256 KiB
 	MaxStepOutputSize = 256 << 10 // 256 KiB
 )
