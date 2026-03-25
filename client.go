@@ -200,7 +200,7 @@ func (c *Client) RegisterJob(ctx context.Context, params RegisterJobParams) (*Jo
 	if err != nil {
 		return nil, err
 	}
-	c.notifyChange(ctx, job.ID, "created")
+	c.notifyChange(ctx, job.ID, pubsub.ActionCreated)
 	return job, nil
 }
 
@@ -221,7 +221,7 @@ func (c *Client) FinalizeJob(ctx context.Context, jobID string, params FinalizeP
 	if err := c.store.FinalizeJob(ctx, jobID, params); err != nil {
 		return err
 	}
-	c.notifyChange(ctx, jobID, "updated")
+	c.notifyChange(ctx, jobID, pubsub.ActionUpdated)
 	return nil
 }
 
@@ -233,7 +233,7 @@ func (c *Client) ReportProgress(ctx context.Context, jobID string, p Progress) e
 	if err := c.store.ReportProgress(ctx, jobID, p); err != nil {
 		return err
 	}
-	c.notifyChange(ctx, jobID, "updated")
+	c.notifyChange(ctx, jobID, pubsub.ActionUpdated)
 	return nil
 }
 
@@ -283,7 +283,7 @@ func (c *Client) RegisterStep(ctx context.Context, jobID string, params Register
 	if err != nil {
 		return nil, err
 	}
-	c.notifyChange(ctx, jobID, "updated")
+	c.notifyChange(ctx, jobID, pubsub.ActionUpdated)
 	return step, nil
 }
 
@@ -330,7 +330,7 @@ func (c *Client) AddTags(ctx context.Context, jobID string, tags []string) error
 	if err := c.store.AddTags(ctx, jobID, tags); err != nil {
 		return err
 	}
-	c.notifyChange(ctx, jobID, "updated")
+	c.notifyChange(ctx, jobID, pubsub.ActionUpdated)
 	return nil
 }
 
@@ -451,7 +451,7 @@ func (c *Client) TrackStep(ctx context.Context, rc *RunContext, name string, fn 
 			})
 		}
 		// Notify after step mutation — TrackStep has access to the parent jobID.
-		c.notifyChange(ctx, rc.JobID, "updated")
+		c.notifyChange(ctx, rc.JobID, pubsub.ActionUpdated)
 	}
 
 	return workErr
