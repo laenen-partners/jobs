@@ -16,3 +16,10 @@ jobs:
       - run: task build
       - run: go vet ./...
       - run: task test:cover
+
+  release:
+    if: github.ref == 'refs/heads/main'
+    needs: ci
+    permissions:
+      contents: write
+    uses: laenen-partners/gh-action-scripts/.github/workflows/release.yaml@main
