@@ -15,7 +15,7 @@ import (
 
 // JobListTable renders the filter bar and job list table.
 templ JobListTable(jobList []jobs.Job, canCancel bool, signals JobListSignals, availTags []string) {
-	<div id="jobs-list" { ds.RawSignals(signalsJSON(signals))... } { stream.Attrs(ctx, jobs.Entity+":*", "/fragments/jobs")... }>
+	<div id="jobs-list" { ds.RawSignals(signalsJSON(signals))... } { stream.Watch(ctx, jobs.Entity+":*", stream.Any.Get("/fragments/jobs"))... }>
 		<div class="flex flex-wrap items-center gap-2 mb-3">
 			@selectinput.Select(selectinput.Props{
 				Size: selectinput.SizeSm,
@@ -100,7 +100,7 @@ templ sortHeader(label string, column string, currentSort string, currentDir str
 // JobDetailContent renders the detail panel for a single job (used inside drawer).
 templ JobDetailContent(job *jobs.Job, jobSteps []jobs.Step, canCancel bool) {
 	<h3 class="text-lg font-bold">Job Details</h3>
-	<div class="space-y-4 mt-3" data-effect={ fmt.Sprintf("if($_stream.%s) @get('/fragments/jobs/%s')", stream.ScopeKey(jobs.Entity+":*"), job.ID) }>
+	<div class="space-y-4 mt-3" data-effect={ fmt.Sprintf("if($_stream.%s) @get('/fragments/jobs/%s')", stream.SignalKey(jobs.Entity+":*"), job.ID) }>
 		<div class="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
 			<span class="text-base-content/60">ID</span>
 			<span class="font-mono text-xs">{ job.ID }</span>

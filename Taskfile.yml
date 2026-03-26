@@ -1,20 +1,15 @@
 version: "3"
 
-vars:
-  GO_MODULES: ". connectrpc ui"
-
 tasks:
   setup:
     desc: Download and verify Go module dependencies
     cmds:
-      - for: { var: GO_MODULES }
-        cmd: cd {{.ITEM}} && go mod download && go mod verify
+      - go mod download && go mod verify
 
   build:
     desc: Build all Go modules
     cmds:
-      - for: { var: GO_MODULES }
-        cmd: cd {{.ITEM}} && go build ./...
+      - go build ./...
 
   generate:
     desc: Run all code generation
@@ -44,8 +39,7 @@ tasks:
   format:go:
     desc: Format Go code
     cmds:
-      - for: { var: GO_MODULES }
-        cmd: cd {{.ITEM}} && gofumpt -l -w .
+      - gofumpt -l -w .
 
   format:proto:
     desc: Format proto files
@@ -68,8 +62,7 @@ tasks:
   lint:go:
     desc: Run golangci-lint
     cmds:
-      - for: { var: GO_MODULES }
-        cmd: cd {{.ITEM}} && golangci-lint run ./...
+      - golangci-lint run ./...
 
   lint:proto:
     desc: Run proto linter
@@ -81,8 +74,7 @@ tasks:
     desc: Run tests and output JUnit XML to reports/
     cmds:
       - mkdir -p reports
-      - for: { var: GO_MODULES }
-        cmd: cd {{.ITEM}} && gotestsum --junitfile ${PWD}/reports/junit-{{.ITEM}}.xml -- ./...
+      - gotestsum --junitfile reports/junit.xml -- ./...
 
   vuln:ci:
     desc: Run osv-scanner vulnerability scan
